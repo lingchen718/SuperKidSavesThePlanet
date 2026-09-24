@@ -655,6 +655,7 @@ class Game {
   }
 
   _handleCatch(item) {
+    if (this.state !== STATE.PLAYING) return;
     this.itemsCaught += 1;
 
     if (item.type === "good") {
@@ -733,6 +734,7 @@ class Game {
     if (!this.quizActive) {
       this._updateKid(dt);
       this._updateItems(dt);
+      if (this.state !== STATE.PLAYING) return; // won or game over this frame
       this._updateFreeze(dt);
       this._checkCleanMode();
     }
