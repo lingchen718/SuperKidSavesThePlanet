@@ -1448,14 +1448,18 @@ class Game {
     } else if (item.type === "bad") {
       this._glow(cx, cy, item.w * 0.66, "255,90,70", 0.28 + 0.12 * Math.sin(t * 5));
     } else if (item.type === "ice") {
-      // Blue cube wrapped in a pulsing red danger ring — clearly "avoid".
-      this._glow(cx, cy, item.w * 0.95, "255,80,80", 0.24 + 0.10 * Math.sin(t * 6));
-      const rr = item.w * 0.60 * (1 + 0.12 * Math.sin(t * 6));
-      ctx.strokeStyle = `rgba(255, 60, 60, ${0.65 + 0.35 * Math.sin(t * 6)})`;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(cx, cy, rr, 0, Math.PI * 2);
-      ctx.stroke();
+      // Red alarming aura + orbiting red sparks — clearly dangerous.
+      this._glow(cx, cy, item.w * 1.05, "255,60,60", 0.42 + 0.16 * Math.sin(t * 5));
+      for (let k = 0; k < 4; k++) {
+        const a = t * 2.4 + (k * Math.PI) / 2;
+        const sx = cx + Math.cos(a) * item.w * 0.78;
+        const sy = cy + Math.sin(a) * item.w * 0.78;
+        const tw = 0.5 + 0.5 * Math.sin(t * 7 + k);
+        ctx.fillStyle = `rgba(255, 130, 120, ${0.5 + 0.5 * tw})`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 3 + tw * 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
     } else if (item.type === "shield") {
       // Golden aura + orbiting sparkles — a reward worth seeking.
       this._glow(cx, cy, item.w * 1.05, "255,210,80", 0.40 + 0.15 * Math.sin(t * 4));
