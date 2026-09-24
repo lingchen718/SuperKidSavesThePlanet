@@ -2,7 +2,7 @@
 
 A kid-friendly arcade game about protecting the planet, rebuilt as a **front-end only web app** from the original [pygame project](https://github.com/lingchen718/superkid-saves-the-planet).
 
-Catch the good eco items, dodge the pollution, answer the quiz questions, and bring Earth back to 100% health before the 5-minute timer runs out.
+Catch the good eco items, dodge the pollution, answer the quiz questions, and bring Earth back to 100% health before the 4-minute timer runs out.
 
 > No accounts. No login. No backend. It runs 100% in the browser.
 

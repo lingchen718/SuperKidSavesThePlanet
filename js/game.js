@@ -24,7 +24,7 @@ const STATE = {
   GAMEOVER: "gameover",
 };
 
-const GAME_DURATION = 5 * 60;            // 5 minute mission
+const GAME_DURATION = 4 * 60;            // 4 minute mission
 const QUIZ_INTERVAL = 5;                 // quiz after every N catches
 const CLEAN_HEALTH_THRESHOLD = 50;       // planet health that unlocks the clean environment
 const FREEZE_SECONDS = 3;                // ice-cube freeze duration
@@ -1388,8 +1388,9 @@ class Game {
     // Subtle animated layer on top of the original background
     this._drawAmbient();
 
-    // Items
+    // Items (with colour-coded effects so players can read them at a glance)
     for (const item of this.items) {
+      this._drawItemEffects(item);
       ctx.drawImage(item.sprite, item.x, item.y, item.w, item.h);
     }
 
@@ -1430,6 +1431,56 @@ class Game {
     ctx.font = "400 26px 'Comic Neue', 'Comic Sans MS', sans-serif";
     ctx.fillStyle = "#e6eef8";
     ctx.fillText("Press P or tap ⏸ to resume", LOGICAL_W / 2, LOGICAL_H / 2 + 30);
+  }
+
+  /* Colour-coded identify aids:
+     green  = good (catch it)
+     red    = bad / ice (avoid it)
+     gold   = shield (grab it for protection) */
+  _drawItemEffects(item) {
+    const ctx = this.ctx;
+    const cx = item.x + item.w / 2;
+    const cy = item.y + item.h / 2;
+    const t = performance.now() / 1000;
+
+    if (item.type === "good") {
+      this._glow(cx, cy, item.w * 0.72, "110,230,110", 0.30 + 0.12 * Math.sin(t * 5));
+    } else if (item.type === "bad") {
+      this._glow(cx, cy, item.w * 0.66, "255,90,70", 0.28 + 0.12 * Math.sin(t * 5));
+    } else if (item.type === "ice") {
+      // Blue cube wrapped in a pulsing red danger ring — clearly "avoid".
+      this._glow(cx, cy, item.w * 0.95, "255,80,80", 0.24 + 0.10 * Math.sin(t * 6));
+      const rr = item.w * 0.60 * (1 + 0.12 * Math.sin(t * 6));
+      ctx.strokeStyle = `rgba(255, 60, 60, ${0.65 + 0.35 * Math.sin(t * 6)})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rr, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (item.type === "shield") {
+      // Golden aura + orbiting sparkles — a reward worth seeking.
+      this._glow(cx, cy, item.w * 1.05, "255,210,80", 0.40 + 0.15 * Math.sin(t * 4));
+      for (let k = 0; k < 4; k++) {
+        const a = t * 2.2 + (k * Math.PI) / 2;
+        const sx = cx + Math.cos(a) * item.w * 0.78;
+        const sy = cy + Math.sin(a) * item.w * 0.78;
+        const tw = 0.5 + 0.5 * Math.sin(t * 6 + k);
+        ctx.fillStyle = `rgba(255, 235, 150, ${0.5 + 0.5 * tw})`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 3 + tw * 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  _glow(cx, cy, r, rgb, alpha) {
+    const ctx = this.ctx;
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    grad.addColorStop(0, `rgba(${rgb}, ${clamp(alpha, 0, 1)})`);
+    grad.addColorStop(1, `rgba(${rgb}, 0)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   _drawKid() {
