@@ -1,7 +1,10 @@
 /* =========================================================================
    Super Kid Saves the Planet — browser edition
    A faithful, front-end-only port of the original pygame game, plus extras:
-   - a new ICE CUBE item that freezes Super Kid for 3 seconds
+   - an ICE CUBE item that freezes Super Kid for 3 seconds
+   - a SHIELD power-up that blocks bad items for 6 seconds
+   - a difficulty ramp (items get faster each minute)
+   - a best score saved in the browser (localStorage)
    - responsive canvas, touch controls, mute toggle
    -------------------------------------------------------------------------
    No accounts, no backend. Runs 100% in the browser.
@@ -25,13 +28,20 @@ const GAME_DURATION = 5 * 60;            // 5 minute mission
 const QUIZ_INTERVAL = 5;                 // quiz after every N catches
 const CLEAN_HEALTH_THRESHOLD = 50;       // planet health that unlocks the clean environment
 const FREEZE_SECONDS = 3;                // ice-cube freeze duration
+const SHIELD_SECONDS = 6;                // shield power-up duration
 const STARTING_HEALTH = 10;
 const STARTING_LIVES = 8;
 
 const ITEM_SIZE = 44;                    // on-screen falling item size (px)
 const KID_SIZE = 118;                    // on-screen kid size (px)
 
-const ICE_PROBABILITY = 0.12;            // chance a falling item is an ice cube
+const BASE_SPAWN_PER_SEC = 3.0;          // items per second at the start
+const BASE_FALL_SPEED_POLLUTED = 780;    // polluted-mode fall speed (px/s)
+const BASE_FALL_SPEED_CLEAN = 850;       // clean-mode fall speed (px/s)
+const SPEEDUP_PER_MINUTE = 0.12;         // +12% fall speed every minute
+const SPAWN_RAMP_PER_MINUTE = 0.2;       // +0.2 items/sec every minute
+
+const BEST_SCORE_KEY = "superKidBestScore";
 
 /* ------------------------------ Utilities ------------------------------ */
 
@@ -126,6 +136,7 @@ async function loadAssets() {
 
   await Promise.all(imagePromises);
   ASSETS.images.ice = makeIceCubeSprite();
+  ASSETS.images.shield = makeShieldSprite();
   return ASSETS;
 }
 
@@ -218,6 +229,78 @@ function makeIceCubeSprite() {
     ctx.stroke();
   }
   ctx.restore();
+
+  return c;
+}
+
+/* ------------------------ Shield sprite (vector) ----------------------- */
+
+function makeShieldSprite() {
+  const size = 160;
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext("2d");
+
+  ctx.translate(size / 2, size / 2);
+
+  // Soft drop shadow
+  ctx.fillStyle = "rgba(20, 60, 120, 0.25)";
+  ctx.beginPath();
+  ctx.ellipse(0, size * 0.34, size * 0.30, size * 0.12, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const s = size * 0.36;
+
+  // Shield outline (rounded top, pointed bottom)
+  ctx.beginPath();
+  ctx.moveTo(0, -s);
+  ctx.lineTo(s, -s * 0.55);
+  ctx.lineTo(s, s * 0.10);
+  ctx.lineTo(0, s);
+  ctx.lineTo(-s, s * 0.10);
+  ctx.lineTo(-s, -s * 0.55);
+  ctx.closePath();
+
+  const grad = ctx.createLinearGradient(0, -s, 0, s);
+  grad.addColorStop(0, "#eafcff");
+  grad.addColorStop(0.5, "#6bc8ff");
+  grad.addColorStop(1, "#2f8fe0");
+  ctx.fillStyle = grad;
+  ctx.fill();
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 6;
+  ctx.stroke();
+
+  // Inner rim
+  ctx.beginPath();
+  ctx.moveTo(0, -s * 0.78);
+  ctx.lineTo(s * 0.78, -s * 0.42);
+  ctx.lineTo(s * 0.78, s * 0.06);
+  ctx.lineTo(0, s * 0.76);
+  ctx.lineTo(-s * 0.78, s * 0.06);
+  ctx.lineTo(-s * 0.78, -s * 0.42);
+  ctx.closePath();
+  ctx.strokeStyle = "rgba(255,255,255,0.75)";
+  ctx.lineWidth = 4;
+  ctx.stroke();
+
+  // Star
+  ctx.fillStyle = "#fff3a6";
+  ctx.beginPath();
+  const spikes = 5;
+  const outer = s * 0.46;
+  const inner = s * 0.22;
+  for (let i = 0; i < spikes * 2; i++) {
+    const r = i % 2 === 0 ? outer : inner;
+    const a = -Math.PI / 2 + (i * Math.PI) / spikes;
+    const px = Math.cos(a) * r;
+    const py = Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
 
   return c;
 }
@@ -321,6 +404,49 @@ class AudioManager {
       osc.stop(t + 1.25);
     });
   }
+
+  /* A bright rising chime when the shield is picked up. */
+  playShield() {
+    if (!this.unlocked || this.muted) return;
+    this.resumeCtx();
+    if (!this.ac) return;
+    const t = this.ac.currentTime;
+    const gain = this.ac.createGain();
+    gain.connect(this.ac.destination);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.20, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.7);
+
+    [523, 659, 784].forEach((freq, i) => {
+      const osc = this.ac.createOscillator();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, t + i * 0.07);
+      osc.connect(gain);
+      osc.start(t + i * 0.07);
+      osc.stop(t + 0.75);
+    });
+  }
+
+  /* A soft thud when the shield blocks a bad item. */
+  playShieldBlock() {
+    if (!this.unlocked || this.muted) return;
+    this.resumeCtx();
+    if (!this.ac) return;
+    const t = this.ac.currentTime;
+    const gain = this.ac.createGain();
+    gain.connect(this.ac.destination);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.16, t + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+
+    const osc = this.ac.createOscillator();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(220, t);
+    osc.frequency.exponentialRampToValueAtTime(110, t + 0.3);
+    osc.connect(gain);
+    osc.start(t);
+    osc.stop(t + 0.35);
+  }
 }
 
 /* ------------------------------ Game ----------------------------------- */
@@ -361,6 +487,17 @@ class Game {
     this.frozen = false;
     this.freezeRemaining = 0;
     this.freezeParticles = [];
+
+    // Shield power-up state
+    this.shieldRemaining = 0;
+
+    // Best score (persisted in the browser)
+    this.bestScore = 0;
+    try {
+      const v = parseInt(localStorage.getItem(BEST_SCORE_KEY) || "0", 10);
+      this.bestScore = isNaN(v) ? 0 : v;
+    } catch (e) { /* private mode / no storage */ }
+    this.newBest = false;
 
     // Clean-mode state
     this.cleanMode = false;
@@ -557,6 +694,8 @@ class Game {
     this.frozen = false;
     this.freezeRemaining = 0;
     this.freezeParticles = [];
+    this.shieldRemaining = 0;
+    this.newBest = false;
     this.smoke = [];
     this.leaves = [];
     this._resetPlayerPosition();
@@ -567,6 +706,7 @@ class Game {
     this.gameWon = true;
     this.health = 100;
     this.state = STATE.WON;
+    this._updateBestScore();
     this.winStartTime = this.elapsed;
     this.winParticles = [];
     for (let i = 0; i < 120; i++) this._spawnWinParticle(true);
@@ -576,7 +716,18 @@ class Game {
 
   _gameOver() {
     this.state = STATE.GAMEOVER;
+    this._updateBestScore();
     this.audio.stopMusic();
+  }
+
+  _updateBestScore() {
+    if (this.score > this.bestScore) {
+      this.bestScore = this.score;
+      this.newBest = true;
+      try { localStorage.setItem(BEST_SCORE_KEY, String(this.bestScore)); } catch (e) {}
+    } else {
+      this.newBest = false;
+    }
   }
 
   /* ---------------------------- Quiz logic ----------------------------- */
@@ -629,14 +780,16 @@ class Game {
   _spawnItem() {
     const r = Math.random();
     let type;
-    if (r < 0.50) type = "good";
-    else if (r < 0.88) type = "bad";
-    else type = "ice";
+    if (r < 0.46) type = "good";
+    else if (r < 0.82) type = "bad";
+    else if (r < 0.92) type = "ice";
+    else type = "shield";
 
     let sprite;
     if (type === "good") sprite = ASSETS.images[`good_${randInt(1, 10)}`];
     else if (type === "bad") sprite = ASSETS.images[`bad_${randInt(1, 10)}`];
-    else sprite = ASSETS.images.ice;
+    else if (type === "ice") sprite = ASSETS.images.ice;
+    else sprite = ASSETS.images.shield;
 
     const x = rand(0, LOGICAL_W - ITEM_SIZE);
     this.items.push({
@@ -677,12 +830,19 @@ class Game {
       this.kid.squashTimer = 10;
       this.audio.play("good");
     } else if (item.type === "bad") {
-      this.score = Math.max(0, this.score - 1);
-      this.health = clamp(this.health - 3, 0, 100);
-      this.lives -= 1;
-      this.kid.flashType = 2;
-      this.kid.flashTimer = 18;
-      this.audio.play("bad");
+      if (this.shieldRemaining > 0) {
+        // The shield absorbs the hit — no damage, no lost life.
+        this.kid.flashType = 4;
+        this.kid.flashTimer = 12;
+        this.audio.playShieldBlock();
+      } else {
+        this.score = Math.max(0, this.score - 1);
+        this.health = clamp(this.health - 3, 0, 100);
+        this.lives -= 1;
+        this.kid.flashType = 2;
+        this.kid.flashTimer = 18;
+        this.audio.play("bad");
+      }
     } else if (item.type === "ice") {
       this.frozen = true;
       this.freezeRemaining = FREEZE_SECONDS;
@@ -690,9 +850,14 @@ class Game {
       this.kid.flashType = 3;   // icy-blue tint
       this.kid.flashTimer = 18;
       this.audio.playFreeze();
+    } else if (item.type === "shield") {
+      this.shieldRemaining = SHIELD_SECONDS;
+      this.kid.flashType = 4;   // golden tint
+      this.kid.flashTimer = 18;
+      this.audio.playShield();
     }
 
-    if (item.type !== "ice") {
+    if (item.type === "good" || item.type === "bad") {
       this.quizCounter += 1;
       if (this.quizCounter % QUIZ_INTERVAL === 0) {
         this._triggerQuiz();
@@ -747,6 +912,7 @@ class Game {
       this._updateItems(dt);
       if (this.state !== STATE.PLAYING) return; // won or game over this frame
       this._updateFreeze(dt);
+      this._updateShield(dt);
       this._checkCleanMode();
     }
 
@@ -790,10 +956,13 @@ class Game {
   }
 
   _updateItems(dt) {
-    const spawnPerSec = 3.0;
+    // Difficulty ramp: a little faster + a few more items every minute.
+    const minutes = Math.floor(this.elapsed / 60);
+    const spawnPerSec = BASE_SPAWN_PER_SEC + minutes * SPAWN_RAMP_PER_MINUTE;
     if (Math.random() < spawnPerSec * dt) this._spawnItem();
 
-    const fallSpeed = this.cleanMode ? 850 : 780;
+    const baseFall = this.cleanMode ? BASE_FALL_SPEED_CLEAN : BASE_FALL_SPEED_POLLUTED;
+    const fallSpeed = baseFall * (1 + minutes * SPEEDUP_PER_MINUTE);
     const caught = [];
     const playerRect = this._kidRect(0.28);
 
@@ -841,6 +1010,13 @@ class Game {
       this.frozen = false;
       this.freezeRemaining = 0;
       this.freezeParticles = [];
+    }
+  }
+
+  _updateShield(dt) {
+    if (this.shieldRemaining > 0) {
+      this.shieldRemaining -= dt;
+      if (this.shieldRemaining <= 0) this.shieldRemaining = 0;
     }
   }
 
@@ -1329,6 +1505,12 @@ class Game {
     }
 
     // 5. Pulsing "begin" prompt
+    if (this.bestScore > 0) {
+      ctx.font = "700 24px 'Comic Neue', 'Comic Sans MS', sans-serif";
+      ctx.fillStyle = "rgba(255, 235, 170, 0.85)";
+      ctx.fillText("Best Score: " + this.bestScore, LOGICAL_W / 2, LOGICAL_H * 0.86);
+    }
+
     const pulse = 0.65 + 0.35 * Math.sin(t * 3.0);
     ctx.font = "700 30px 'Comic Neue', 'Comic Sans MS', sans-serif";
     const msg = "Press ENTER or tap anywhere to Begin!";
@@ -1349,6 +1531,9 @@ class Game {
 
     // Kid
     this._drawKid();
+
+    // Shield bubble
+    if (this.shieldRemaining > 0) this._drawShield();
 
     // Freeze particles + overlay
     if (this.frozen) this._drawFreezeEffects();
@@ -1397,12 +1582,45 @@ class Game {
     ctx.restore();
   }
 
+  /* Glowing protective bubble + countdown shown while the shield is active. */
+  _drawShield() {
+    const ctx = this.ctx;
+    const kid = this.kid;
+    const cx = kid.x + kid.w / 2;
+    const cy = kid.y - kid.h / 2;
+    const r = kid.w * 0.74;
+    const t = performance.now() / 1000;
+
+    const grad = ctx.createRadialGradient(cx, cy, r * 0.3, cx, cy, r);
+    grad.addColorStop(0, "rgba(150,220,255,0.08)");
+    grad.addColorStop(0.7, "rgba(120,200,255,0.22)");
+    grad.addColorStop(1, "rgba(170,235,255,0.5)");
+    ctx.save();
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(215,245,255,${0.55 + 0.3 * Math.sin(t * 4)})`;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.restore();
+
+    const secs = Math.ceil(this.shieldRemaining);
+    ctx.textAlign = "center";
+    ctx.font = "700 24px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#0a2a44";
+    ctx.fillText("SHIELD " + secs + "s", cx + 2, kid.y - kid.h - 14 + 2);
+    ctx.fillStyle = "#9fdfff";
+    ctx.fillText("SHIELD " + secs + "s", cx, kid.y - kid.h - 14);
+  }
+
   /* Returns the player image with a translucent colour tint applied. */
   _flashedSprite(base, kid) {
     if (kid.flashType === 0 || kid.flashTimer <= 0) return base;
 
     const color = kid.flashType === 1 ? "80,255,130"
                 : kid.flashType === 2 ? "255,80,80"
+                : kid.flashType === 4 ? "255,215,90"
                 : "130,210,255"; // ice
 
     // Pulsing blink (on/off a few times).
@@ -1670,11 +1888,20 @@ class Game {
     ctx.fillStyle = "#d8e0ee";
     ctx.fillText(`Final score: ${this.score}`, LOGICAL_W / 2, LOGICAL_H / 2 + 58);
 
+    ctx.font = "700 24px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    if (this.newBest) {
+      ctx.fillStyle = "#ffd66b";
+      ctx.fillText(`\u2605 NEW BEST! ${this.bestScore}`, LOGICAL_W / 2, LOGICAL_H / 2 + 92);
+    } else {
+      ctx.fillStyle = "#c9d2e0";
+      ctx.fillText(`Best: ${this.bestScore}`, LOGICAL_W / 2, LOGICAL_H / 2 + 92);
+    }
+
     // Play again button
     const bw = 260;
     const bh = 74;
     const bx = LOGICAL_W / 2 - bw / 2;
-    const by = LOGICAL_H / 2 + 92;
+    const by = LOGICAL_H / 2 + 124;
     this.playAgainRect = { x: bx, y: by, w: bw, h: bh };
     ctx.fillStyle = "#00c800";
     roundedRect(ctx, bx, by, bw, bh, 16);
@@ -1764,11 +1991,20 @@ class Game {
     ctx.fillStyle = "#ffffff";
     ctx.fillText(`Final score: ${this.score}`, LOGICAL_W / 2, lineY + 18);
 
+    ctx.font = "700 24px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    if (this.newBest) {
+      ctx.fillStyle = "#ffdc3c";
+      ctx.fillText(`\u2605 NEW BEST! ${this.bestScore}`, LOGICAL_W / 2, lineY + 50);
+    } else {
+      ctx.fillStyle = "#dff2f8";
+      ctx.fillText(`Best: ${this.bestScore}`, LOGICAL_W / 2, lineY + 50);
+    }
+
     // Play again button
     const bw = 260;
     const bh = 74;
     const bx = LOGICAL_W / 2 - bw / 2;
-    const by = lineY + 40;
+    const by = lineY + 78;
     this.playAgainRect = { x: bx, y: by, w: bw, h: bh };
     ctx.fillStyle = "#00b33c";
     roundedRect(ctx, bx, by, bw, bh, 16);

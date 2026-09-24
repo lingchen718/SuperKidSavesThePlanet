@@ -10,7 +10,10 @@ Catch the good eco items, dodge the pollution, answer the quiz questions, and br
 
 - **Catch good items** (recycling, trees, solar power…) to raise planet health and earn points.
 - **Avoid bad items** (smoke, trash, plastic…) — they hurt the planet and cost a life.
-- **🧊 NEW — Ice cubes:** catching an ice cube **freezes Super Kid for 3 seconds** before you can move again.
+- **🧊 Ice cubes:** catching an ice cube **freezes Super Kid for 3 seconds** before you can move again.
+- **🛡 Shield power-up:** catch a shield to block bad items for 6 seconds.
+- **📈 Difficulty ramp:** items fall a little faster (and slightly more often) every minute.
+- **🏆 Best score** is saved in the browser (localStorage) — no account needed.
 - **Eco quizzes:** every 5 catches opens a quick quiz. Answer correctly for a big +6 health bonus.
 - **Clean Environment mode:** when planet health reaches **50%**, the world transforms from polluted to clean (background + music change).
 - **Win / Game Over screens** with confetti, score, and instant replay.
@@ -76,8 +79,9 @@ The code is organised so new mechanics are easy to add:
 
 - **Gameplay tuning** — constants live at the top of `js/game.js`:
   `GAME_DURATION`, `QUIZ_INTERVAL`, `CLEAN_HEALTH_THRESHOLD`, `FREEZE_SECONDS`,
-  `STARTING_HEALTH`, `STARTING_LIVES`, `ICE_PROBABILITY`.
-  Item spawn rate and fall speed are tuned in `_updateItems()`.
+  `SHIELD_SECONDS`, `STARTING_HEALTH`, `STARTING_LIVES`, and the difficulty ramp
+  (`BASE_SPAWN_PER_SEC`, `BASE_FALL_SPEED_*`, `SPEEDUP_PER_MINUTE`, `SPAWN_RAMP_PER_MINUTE`).
+  The best score is stored under `BEST_SCORE_KEY`.
 - **New falling item types** — extend `_spawnItem()` and `_handleCatch()` in `js/game.js`
   (and optionally add a sprite in `assets/images/`).
 - **New quiz questions** — edit `js/quizzes.js`.
