@@ -28,18 +28,18 @@ const GAME_DURATION = 5 * 60;            // 5 minute mission
 const QUIZ_INTERVAL = 5;                 // quiz after every N catches
 const CLEAN_HEALTH_THRESHOLD = 50;       // planet health that unlocks the clean environment
 const FREEZE_SECONDS = 3;                // ice-cube freeze duration
-const SHIELD_SECONDS = 6;                // shield power-up duration
+const SHIELD_SECONDS = 7;                // shield power-up duration
 const STARTING_HEALTH = 10;
 const STARTING_LIVES = 8;
 
 const ITEM_SIZE = 44;                    // on-screen falling item size (px)
 const KID_SIZE = 118;                    // on-screen kid size (px)
 
-const BASE_SPAWN_PER_SEC = 3.0;          // items per second at the start
-const BASE_FALL_SPEED_POLLUTED = 780;    // polluted-mode fall speed (px/s)
-const BASE_FALL_SPEED_CLEAN = 850;       // clean-mode fall speed (px/s)
-const SPEEDUP_PER_MINUTE = 0.12;         // +12% fall speed every minute
-const SPAWN_RAMP_PER_MINUTE = 0.2;       // +0.2 items/sec every minute
+const BASE_SPAWN_PER_SEC = 2.6;          // items per second at the start
+const BASE_FALL_SPEED_POLLUTED = 720;    // polluted-mode fall speed (px/s)
+const BASE_FALL_SPEED_CLEAN = 790;       // clean-mode fall speed (px/s)
+const SPEEDUP_PER_MINUTE = 0.10;         // +10% fall speed every minute
+const SPAWN_RAMP_PER_MINUTE = 0.15;      // +0.15 items/sec every minute
 
 const BEST_SCORE_KEY = "superKidBestScore";
 
@@ -491,6 +491,9 @@ class Game {
     // Shield power-up state
     this.shieldRemaining = 0;
 
+    // Pause state
+    this.paused = false;
+
     // Best score (persisted in the browser)
     this.bestScore = 0;
     try {
@@ -560,6 +563,22 @@ class Game {
         muteBtn.textContent = muted ? "🔇" : "🔊";
       });
     }
+
+    const pauseBtn = document.getElementById("pause-btn");
+    if (pauseBtn) {
+      pauseBtn.addEventListener("click", () => this.togglePause());
+    }
+  }
+
+  togglePause() {
+    if (this.state !== STATE.PLAYING || this.quizActive) return;
+    this.paused = !this.paused;
+    this._syncPauseButton();
+  }
+
+  _syncPauseButton() {
+    const btn = document.getElementById("pause-btn");
+    if (btn) btn.textContent = this.paused ? "▶️" : "⏸️";
   }
 
   _toLogical(e) {
@@ -593,6 +612,7 @@ class Game {
     }
 
     if (this.state === STATE.PLAYING) {
+      if (this.paused) return;
       // Hold left / right half of the screen to move (touch friendly).
       if (p.x < LOGICAL_W / 2) {
         this.keys.left = true;
@@ -630,6 +650,12 @@ class Game {
     if (["ArrowLeft", "ArrowRight", " ", "Enter"].includes(k)) e.preventDefault();
 
     this.audio.unlock();
+
+    // Pause / resume (P or Escape) — only during active gameplay.
+    if (k === "p" || k === "P" || k === "Escape") {
+      if (this.state === STATE.PLAYING && !this.quizActive) this.togglePause();
+      return;
+    }
 
     if (this.state === STATE.INTRO) {
       if (k === "Enter" || k === " ") this._startGame();
@@ -696,6 +722,8 @@ class Game {
     this.freezeParticles = [];
     this.shieldRemaining = 0;
     this.newBest = false;
+    this.paused = false;
+    this._syncPauseButton();
     this.smoke = [];
     this.leaves = [];
     this._resetPlayerPosition();
@@ -874,6 +902,8 @@ class Game {
   }
 
   _update(dt) {
+    if (this.paused && this.state === STATE.PLAYING) return;
+
     this._updateAmbient(dt);
 
     if (this.state === STATE.INTRO) {
@@ -1546,6 +1576,26 @@ class Game {
 
     // Quiz
     if (this.quizActive) this._drawQuiz();
+
+    // Pause overlay
+    if (this.paused) this._drawPausedOverlay();
+  }
+
+  _drawPausedOverlay() {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(5, 10, 22, 0.62)";
+    ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+
+    ctx.textAlign = "center";
+    ctx.font = "700 64px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#0a0e19";
+    ctx.fillText("PAUSED", LOGICAL_W / 2 + 3, LOGICAL_H / 2 - 18 + 3);
+    ctx.fillStyle = "#ffd66b";
+    ctx.fillText("PAUSED", LOGICAL_W / 2, LOGICAL_H / 2 - 18);
+
+    ctx.font = "400 26px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#e6eef8";
+    ctx.fillText("Press P or tap ⏸ to resume", LOGICAL_W / 2, LOGICAL_H / 2 + 30);
   }
 
   _drawKid() {

@@ -55,27 +55,32 @@ html, body {
   outline: none;
 }
 
-.mute {
+.mute,
+.pause {
   position: absolute;
   top: 14px;
-  right: 14px;
-  z-index: 5;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
   border: 2px solid rgba(255,255,255,0.25);
   background: rgba(10, 14, 28, 0.72);
   color: #fff;
   font-size: 22px;
   line-height: 1;
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: transform .12s ease, background .12s ease;
+  z-index: 5;
 }
-.mute:hover { transform: scale(1.08); background: rgba(30, 40, 70, 0.9); }
-.mute:active { transform: scale(0.96); }
+.pause { right: 72px; }
+.mute { right: 14px; }
+.mute:hover,
+.pause:hover { transform: scale(1.08); background: rgba(30, 40, 70, 0.9); }
+.mute:active,
+.pause:active { transform: scale(0.96); }
+
 
 #hint {
   position: absolute;

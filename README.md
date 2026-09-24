@@ -11,7 +11,7 @@ Catch the good eco items, dodge the pollution, answer the quiz questions, and br
 - **Catch good items** (recycling, trees, solar power…) to raise planet health and earn points.
 - **Avoid bad items** (smoke, trash, plastic…) — they hurt the planet and cost a life.
 - **🧊 Ice cubes:** catching an ice cube **freezes Super Kid for 3 seconds** before you can move again.
-- **🛡 Shield power-up:** catch a shield to block bad items for 6 seconds.
+- **🛡 Shield power-up:** catch a shield to block bad items for 7 seconds.
 - **📈 Difficulty ramp:** items fall a little faster (and slightly more often) every minute.
 - **🏆 Best score** is saved in the browser (localStorage) — no account needed.
 - **Eco quizzes:** every 5 catches opens a quick quiz. Answer correctly for a big +6 health bonus.
@@ -21,6 +21,7 @@ Catch the good eco items, dodge the pollution, answer the quiz questions, and br
 - **Polished, animated backgrounds** (hazy city vs. sunny hills) designed for kids 8–12.
 - **Touch & keyboard controls** so it works on phones, tablets, and desktops.
 - **Mute toggle** (top-right 🔊 button).
+- **Pause / resume** (top-right ⏸ button or `P`).
 
 ## 🎮 Controls
 
@@ -31,6 +32,7 @@ Catch the good eco items, dodge the pollution, answer the quiz questions, and br
 | Answer quiz | `A` `B` `C` | Tap the answer |
 | Continue after quiz | Any key | Tap anywhere |
 | Toggle sound | — | 🔊 button (top-right) |
+| Pause / resume | `P` or `Esc` | ⏸ button (top-right) |
 
 ## ▶️ Run it locally
 
