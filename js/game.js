@@ -1369,14 +1369,18 @@ class Game {
     const ctx = this.ctx;
 
     // Background — original artwork
+    if (this.cleanMode) {
+      ctx.save();
+      ctx.filter = "contrast(1.15)";   // a touch more definition in clean mode
+    }
     this._drawImageCover(
       this.cleanMode ? ASSETS.images.cleanBg : ASSETS.images.pollutedBg,
       LOGICAL_W,
       LOGICAL_H
     );
-
-    // Soften the clean scene so it reads lighter and less saturated.
     if (this.cleanMode) {
+      ctx.restore();
+      // Keep the light, soft look — a little contrast without losing the wash.
       ctx.fillStyle = "rgba(255, 255, 255, 0.20)";
       ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
     }
