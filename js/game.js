@@ -497,6 +497,14 @@ class Game {
     // Ambient background-motion particles (smoke / petals / sparks)
     this.ambient = [];
 
+    // Chimney positions that emit vivid brown smoke in the polluted scene.
+    this.brownEmitters = [
+      { x: 560, y: 360 },
+      { x: 650, y: 330 },
+      { x: 730, y: 360 },
+      { x: 610, y: 430 },
+    ];
+
     // Best score (persisted in the browser)
     this.bestScore = 0;
     try {
@@ -1055,6 +1063,7 @@ class Game {
       if (Math.random() < 1.5 * dt) this._spawnSpark();
     } else {
       if (Math.random() < 2.5 * dt) this._spawnSmoke();
+      if (Math.random() < 3.0 * dt) this._spawnBrownSmoke();
     }
 
     for (let i = this.ambient.length - 1; i >= 0; i--) {
@@ -1064,6 +1073,11 @@ class Game {
       if (p.kind === "smoke") {
         p.y += p.vy * dt;
         p.x += p.vx * dt + Math.sin(p.age * 1.5 + p.phase) * 8 * dt;
+        p.r += p.grow * dt;
+        p.alpha = p.baseAlpha * (1 - p.age / p.maxLife);
+      } else if (p.kind === "brown") {
+        p.y += p.vy * dt;
+        p.x += p.vx * dt + Math.sin(p.age * 1.2 + p.phase) * 10 * dt;
         p.r += p.grow * dt;
         p.alpha = p.baseAlpha * (1 - p.age / p.maxLife);
       } else if (p.kind === "petal") {
@@ -1094,6 +1108,23 @@ class Game {
       phase: rand(0, Math.PI * 2),
       age: 0,
       maxLife: rand(4, 7),
+    });
+  }
+
+  _spawnBrownSmoke() {
+    const e = pick(this.brownEmitters);
+    this.ambient.push({
+      kind: "brown",
+      x: e.x + rand(-14, 14),
+      y: e.y + rand(-6, 6),
+      vx: rand(-8, 8),
+      vy: rand(-34, -20),
+      r: rand(16, 28),
+      grow: rand(5, 9),
+      baseAlpha: rand(0.22, 0.36),
+      phase: rand(0, Math.PI * 2),
+      age: 0,
+      maxLife: rand(5, 8),
     });
   }
 
@@ -1137,6 +1168,17 @@ class Game {
         ctx.fillStyle = "#c7c2c9";
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (p.kind === "brown") {
+        ctx.globalAlpha = clamp(p.alpha, 0, 1);
+        ctx.fillStyle = "#a0673d";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = clamp(p.alpha * 0.85, 0, 1);
+        ctx.fillStyle = "#d69a5a";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r * 0.55, 0, Math.PI * 2);
         ctx.fill();
       } else if (p.kind === "petal") {
         ctx.globalAlpha = clamp(p.alpha, 0, 1);
