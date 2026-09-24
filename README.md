@@ -18,7 +18,7 @@ Catch the good eco items, dodge the pollution, answer the quiz questions, and br
 - **Clean Environment mode:** when planet health reaches **50%**, the world transforms from polluted to clean (background + music change).
 - **Win / Game Over screens** with confetti, score, and instant replay.
 - **More falling items** with a slightly faster drop speed for extra action.
-- **Original hand-drawn backgrounds** (polluted city vs. clean nature) kept from the original game.
+- **Original hand-drawn backgrounds** (polluted city vs. clean nature), now with subtle live motion — drifting smoke in the city and falling petals/sparkles in the clean world.
 - **Touch & keyboard controls** so it works on phones, tablets, and desktops.
 - **Fully responsive layout** — the 4:3 play area scales to any screen and the controls stay anchored to the game.
 - **Mute toggle** (top-right 🔊 button).

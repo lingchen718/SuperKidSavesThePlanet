@@ -494,6 +494,9 @@ class Game {
     // Pause state
     this.paused = false;
 
+    // Ambient background-motion particles (smoke / petals / sparks)
+    this.ambient = [];
+
     // Best score (persisted in the browser)
     this.bestScore = 0;
     try {
@@ -715,6 +718,7 @@ class Game {
     this.shieldRemaining = 0;
     this.newBest = false;
     this.paused = false;
+    this.ambient = [];
     this._syncPauseButton();
     this._resetPlayerPosition();
     this.audio.playMusic("polluted");
@@ -894,6 +898,11 @@ class Game {
   _update(dt) {
     if (this.paused && this.state === STATE.PLAYING) return;
 
+    // Keep the background alive on the play + game-over screens.
+    if (this.state === STATE.PLAYING || this.state === STATE.GAMEOVER) {
+      this._updateAmbient(dt);
+    }
+
     if (this.state === STATE.INTRO) {
       this._updateIntro(dt);
       return;
@@ -1038,10 +1047,121 @@ class Game {
     }
   }
 
+  /* ---------------- Ambient background-motion particles ---------------- */
+
+  _updateAmbient(dt) {
+    if (this.cleanMode) {
+      if (Math.random() < 2.5 * dt) this._spawnPetal();
+      if (Math.random() < 1.5 * dt) this._spawnSpark();
+    } else {
+      if (Math.random() < 2.5 * dt) this._spawnSmoke();
+    }
+
+    for (let i = this.ambient.length - 1; i >= 0; i--) {
+      const p = this.ambient[i];
+      p.age += dt;
+
+      if (p.kind === "smoke") {
+        p.y += p.vy * dt;
+        p.x += p.vx * dt + Math.sin(p.age * 1.5 + p.phase) * 8 * dt;
+        p.r += p.grow * dt;
+        p.alpha = p.baseAlpha * (1 - p.age / p.maxLife);
+      } else if (p.kind === "petal") {
+        p.y += p.vy * dt;
+        p.x += p.vx * dt + Math.sin((p.age + p.phase) * 2) * 24 * dt;
+        p.rot += p.spin * dt;
+        p.alpha = p.baseAlpha * (1 - p.age / p.maxLife);
+      } else { // spark
+        p.alpha = p.baseAlpha * Math.sin((p.age / p.maxLife) * Math.PI);
+      }
+
+      if (p.age >= p.maxLife || p.y > LOGICAL_H + 40 || p.alpha <= 0) {
+        this.ambient.splice(i, 1);
+      }
+    }
+  }
+
+  _spawnSmoke() {
+    this.ambient.push({
+      kind: "smoke",
+      x: rand(0, LOGICAL_W),
+      y: LOGICAL_H - rand(0, 230),
+      vx: rand(-6, 6),
+      vy: rand(-28, -16),
+      r: rand(10, 22),
+      grow: rand(4, 8),
+      baseAlpha: rand(0.10, 0.22),
+      phase: rand(0, Math.PI * 2),
+      age: 0,
+      maxLife: rand(4, 7),
+    });
+  }
+
+  _spawnPetal() {
+    const colors = ["#ffd66b", "#ff8fa3", "#b9f27a", "#9ad8ff", "#ffb3c6"];
+    this.ambient.push({
+      kind: "petal",
+      x: rand(0, LOGICAL_W),
+      y: -20,
+      vx: rand(-12, 12),
+      vy: rand(40, 80),
+      size: rand(3, 7),
+      color: pick(colors),
+      rot: rand(0, 360),
+      spin: rand(-100, 100),
+      baseAlpha: rand(0.5, 0.85),
+      phase: rand(0, Math.PI * 2),
+      age: 0,
+      maxLife: rand(7, 11),
+    });
+  }
+
+  _spawnSpark() {
+    this.ambient.push({
+      kind: "spark",
+      x: rand(0, LOGICAL_W),
+      y: rand(40, LOGICAL_H * 0.6),
+      size: rand(1.5, 3),
+      baseAlpha: rand(0.4, 0.8),
+      age: 0,
+      maxLife: rand(1.2, 2.5),
+    });
+  }
+
+  _drawAmbient() {
+    const ctx = this.ctx;
+    for (const p of this.ambient) {
+      ctx.save();
+      if (p.kind === "smoke") {
+        ctx.globalAlpha = clamp(p.alpha, 0, 1);
+        ctx.fillStyle = "#c7c2c9";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (p.kind === "petal") {
+        ctx.globalAlpha = clamp(p.alpha, 0, 1);
+        ctx.translate(p.x, p.y);
+        ctx.rotate((p.rot * Math.PI) / 180);
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, p.size, p.size * 0.6, 0, 0, Math.PI * 2);
+        ctx.fill();
+      } else { // spark
+        ctx.globalAlpha = clamp(p.alpha, 0, 1);
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
   _checkCleanMode() {
     if (!this.cleanMode && this.health >= CLEAN_HEALTH_THRESHOLD) {
       this.cleanMode = true;
       this.cleanMsgTimer = 3;
+      this.ambient = [];   // swap smoke for petals / sparks
       this.audio.playMusic("clean");
     }
   }
@@ -1208,6 +1328,9 @@ class Game {
       LOGICAL_W,
       LOGICAL_H
     );
+
+    // Subtle animated layer on top of the original background
+    this._drawAmbient();
 
     // Items
     for (const item of this.items) {
