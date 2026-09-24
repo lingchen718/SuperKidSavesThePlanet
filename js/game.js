@@ -1,0 +1,1468 @@
+/* =========================================================================
+   Super Kid Saves the Planet — browser edition
+   A faithful, front-end-only port of the original pygame game, plus extras:
+   - a new ICE CUBE item that freezes Super Kid for 3 seconds
+   - responsive canvas, touch controls, mute toggle
+   -------------------------------------------------------------------------
+   No accounts, no backend. Runs 100% in the browser.
+   ========================================================================= */
+
+"use strict";
+
+/* ----------------------------- Constants ------------------------------- */
+
+const LOGICAL_W = 1200;
+const LOGICAL_H = 900;
+
+const STATE = {
+  INTRO: "intro",
+  PLAYING: "playing",
+  WON: "won",
+  GAMEOVER: "gameover",
+};
+
+const GAME_DURATION = 5 * 60;            // 5 minute mission
+const QUIZ_INTERVAL = 5;                 // quiz after every N catches
+const CLEAN_ECO_THRESHOLD = 6;           // eco actions needed to clean the planet
+const FREEZE_SECONDS = 3;                // ice-cube freeze duration
+const STARTING_HEALTH = 10;
+const STARTING_LIVES = 8;
+
+const ITEM_SIZE = 44;                    // on-screen falling item size (px)
+const KID_SIZE = 118;                    // on-screen kid size (px)
+
+const ICE_PROBABILITY = 0.12;            // chance a falling item is an ice cube
+
+/* ------------------------------ Utilities ------------------------------ */
+
+function rand(min, max) {
+  return Math.random() * (max - min) + min;
+}
+function randInt(min, max) {
+  return Math.floor(rand(min, max + 1));
+}
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+function choice(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+function pick(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function roundedRect(ctx, x, y, w, h, r) {
+  if (typeof ctx.roundRect === "function") {
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, r);
+  } else {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+}
+
+/* ---------------------------- Asset loading ---------------------------- */
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Failed to load " + src));
+    img.src = src;
+  });
+}
+
+const ASSETS = {
+  images: {},
+  sounds: {},
+  music: {},
+};
+
+const IMAGE_FILES = {
+  player: "assets/images/super_kid.png",
+  pollutedBg: "assets/images/polluted_4.png",
+  cleanBg: "assets/images/clean_1.png",
+  introUniverse: "assets/images/intro_universe_bg.png",
+  introEarth: "assets/images/intro_polluted_earth.png",
+  winEarth: "assets/images/win_clean_earth.png",
+};
+
+const SOUND_FILES = {
+  good: "assets/sounds/coinsplash.ogg",
+  bad: "assets/sounds/alarm.ogg",
+  quiz: "assets/sounds/magical_6.ogg",
+  celebration: "assets/sounds/newthingget.ogg",
+};
+
+const MUSIC_FILES = {
+  polluted: "assets/sounds/Iwan Gabovitch - Dark Ambience Loop.ogg",
+  clean: "assets/sounds/A Journey Awaits.ogg",
+};
+
+async function loadAssets() {
+  const imagePromises = Object.entries(IMAGE_FILES).map(async ([key, src]) => {
+    ASSETS.images[key] = await loadImage(src);
+  });
+
+  // Good / bad falling-item sprites (10 of each).
+  for (let i = 1; i <= 10; i++) {
+    imagePromises.push(
+      loadImage(`assets/images/good_${i}.png`).then(img => {
+        ASSETS.images[`good_${i}`] = img;
+      })
+    );
+    imagePromises.push(
+      loadImage(`assets/images/bad_${i}.png`).then(img => {
+        ASSETS.images[`bad_${i}`] = img;
+      })
+    );
+  }
+
+  await Promise.all(imagePromises);
+  ASSETS.images.ice = makeIceCubeSprite();
+  return ASSETS;
+}
+
+/* ------------------------- Ice cube sprite (vector) -------------------- */
+
+function makeIceCubeSprite() {
+  const size = 160;
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext("2d");
+
+  ctx.translate(size / 2, size / 2);
+
+  // Soft drop shadow
+  ctx.fillStyle = "rgba(20, 60, 120, 0.25)";
+  ctx.beginPath();
+  ctx.ellipse(0, size * 0.34, size * 0.30, size * 0.12, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Cube body (isometric-ish): top, front-left, front-right faces
+  const s = size * 0.34;
+  const top = [
+    [0, -s * 0.62],
+    [s * 0.78, -s * 0.18],
+    [0, s * 0.30],
+    [-s * 0.78, -s * 0.18],
+  ];
+  const frontLeft = [
+    [-s * 0.78, -s * 0.18],
+    [0, s * 0.30],
+    [0, s * 0.94],
+    [-s * 0.78, s * 0.44],
+  ];
+  const frontRight = [
+    [s * 0.78, -s * 0.18],
+    [0, s * 0.30],
+    [0, s * 0.94],
+    [s * 0.78, s * 0.44],
+  ];
+
+  function path(pts) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+  }
+
+  // top face (lightest)
+  path(top);
+  ctx.fillStyle = "rgba(210, 240, 255, 0.96)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.95)";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  // front-left face (mid blue)
+  path(frontLeft);
+  ctx.fillStyle = "rgba(125, 205, 250, 0.96)";
+  ctx.fill();
+  ctx.stroke();
+
+  // front-right face (deeper blue)
+  path(frontRight);
+  ctx.fillStyle = "rgba(60, 155, 225, 0.96)";
+  ctx.fill();
+  ctx.stroke();
+
+  // small highlight streak
+  ctx.beginPath();
+  ctx.moveTo(-s * 0.55, -s * 0.14);
+  ctx.lineTo(-s * 0.30, -s * 0.14);
+  ctx.lineTo(-s * 0.48, s * 0.05);
+  ctx.lineTo(-s * 0.68, s * 0.05);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(255,255,255,0.65)";
+  ctx.fill();
+
+  // snowflake on the front face
+  ctx.save();
+  ctx.translate(s * 0.02, s * 0.55);
+  ctx.strokeStyle = "rgba(255,255,255,0.95)";
+  ctx.lineWidth = 4;
+  ctx.lineCap = "round";
+  for (let k = 0; k < 6; k++) {
+    const a = (Math.PI / 3) * k;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(a) * s * 0.26, Math.sin(a) * s * 0.26);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  return c;
+}
+
+/* ------------------------------ Audio ---------------------------------- */
+
+class AudioManager {
+  constructor() {
+    this.muted = false;
+    this.unlocked = false;
+    this.ac = null;               // WebAudio context for the freeze chime
+    this.currentMusic = null;     // "polluted" | "clean" | null
+    this.sounds = {};
+    this.musicEls = {};
+  }
+
+  /* Must be called from a user gesture before any sound may play. */
+  unlock() {
+    if (this.unlocked) return;
+    this.unlocked = true;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) this.ac = new AC();
+    } catch (e) { /* ignore */ }
+
+    // Build (but don't play) the music elements.
+    for (const [mode, src] of Object.entries(MUSIC_FILES)) {
+      const el = new Audio(src);
+      el.loop = true;
+      el.preload = "auto";
+      el.volume = 0.6;
+      this.musicEls[mode] = el;
+    }
+    for (const [name, src] of Object.entries(SOUND_FILES)) {
+      this.sounds[name] = new Audio(src);
+      this.sounds[name].preload = "auto";
+    }
+  }
+
+  resumeCtx() {
+    if (this.ac && this.ac.state === "suspended") this.ac.resume();
+  }
+
+  setMuted(muted) {
+    this.muted = muted;
+    for (const el of Object.values(this.musicEls)) el.muted = muted;
+    for (const el of Object.values(this.sounds)) el.muted = muted;
+  }
+
+  playMusic(mode) {
+    if (!this.unlocked || !this.musicEls[mode]) return;
+    if (this.currentMusic === mode) return;
+    if (this.currentMusic && this.musicEls[this.currentMusic]) {
+      this.musicEls[this.currentMusic].pause();
+      this.musicEls[this.currentMusic].currentTime = 0;
+    }
+    const el = this.musicEls[mode];
+    this.currentMusic = mode;
+    el.currentTime = 0;
+    const p = el.play();
+    if (p && p.catch) p.catch(() => {});
+  }
+
+  stopMusic() {
+    if (this.currentMusic && this.musicEls[this.currentMusic]) {
+      this.musicEls[this.currentMusic].pause();
+      this.musicEls[this.currentMusic].currentTime = 0;
+    }
+    this.currentMusic = null;
+  }
+
+  play(name) {
+    if (!this.unlocked || !this.sounds[name] || this.muted) return;
+    const base = this.sounds[name];
+    const clone = base.cloneNode();
+    clone.volume = base.volume;
+    clone.currentTime = 0;
+    const p = clone.play();
+    if (p && p.catch) p.catch(() => {});
+  }
+
+  /* A short icy chime, synthesised so we don't need an extra asset. */
+  playFreeze() {
+    if (!this.unlocked || this.muted) return;
+    this.resumeCtx();
+    if (!this.ac) return;
+    const t = this.ac.currentTime;
+    const gain = this.ac.createGain();
+    gain.connect(this.ac.destination);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 1.2);
+
+    [880, 660, 523].forEach((freq, i) => {
+      const osc = this.ac.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, t + i * 0.06);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.5, t + 1.2);
+      osc.connect(gain);
+      osc.start(t + i * 0.06);
+      osc.stop(t + 1.25);
+    });
+  }
+}
+
+/* ------------------------------ Game ----------------------------------- */
+
+class Game {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.audio = new AudioManager();
+    this.state = STATE.INTRO;
+
+    this.keys = { left: false, right: false };
+    this.pointerDown = false;
+    this.quizActive = false;
+    this.quiz = null;
+    this.quizResult = null;
+    this.quizOptionRects = [];
+
+    this.lastTime = 0;
+    this.elapsed = 0;             // mission seconds elapsed (pauses during quiz)
+    this.timeUp = false;
+
+    // Player
+    this.kid = {
+      x: 0,                        // left edge
+      y: 0,                        // feet Y (bottom)
+      w: KID_SIZE,
+      h: KID_SIZE,
+      facingRight: true,
+      bobTimer: 0,
+      flashType: 0,                // 0 none, 1 good, 2 bad
+      flashTimer: 0,
+      squash: 1,
+      squashTimer: 0,
+    };
+
+    // Frozen state
+    this.frozen = false;
+    this.freezeRemaining = 0;
+    this.freezeParticles = [];
+
+    // Clean-mode state
+    this.cleanMode = false;
+    this.cleanMsgTimer = 0;
+
+    this.items = [];
+    this.itemsCaught = 0;
+    this.quizCounter = 0;
+    this.ecoActions = 0;
+    this.score = 0;
+    this.health = STARTING_HEALTH;
+    this.lives = STARTING_LIVES;
+    this.gameWon = false;
+
+    this.winParticles = [];
+    this.winStartTime = 0;
+    this.winElapsed = 0;
+
+    // Intro subtitle state
+    this.introLineIndex = 0;
+    this.introLineTime = 0;
+
+    this.playAgainRect = null;
+
+    this._bindInput();
+  }
+
+  async init() {
+    await loadAssets();
+    this._resetPlayerPosition();
+    this._startLoop();
+  }
+
+  /* ------------------------------ Input -------------------------------- */
+
+  _bindInput() {
+    const cv = this.canvas;
+
+    cv.addEventListener("pointerdown", (e) => this._onPointerDown(e));
+    cv.addEventListener("pointerup", (e) => this._onPointerUp(e));
+    cv.addEventListener("pointercancel", (e) => this._onPointerUp(e));
+    cv.addEventListener("pointermove", (e) => this._onPointerMove(e));
+
+    window.addEventListener("keydown", (e) => this._onKeyDown(e));
+    window.addEventListener("keyup", (e) => this._onKeyUp(e));
+
+    const muteBtn = document.getElementById("mute-btn");
+    if (muteBtn) {
+      muteBtn.addEventListener("click", () => {
+        this.audio.unlock();
+        const muted = !this.audio.muted;
+        this.audio.setMuted(muted);
+        muteBtn.textContent = muted ? "🔇" : "🔊";
+      });
+    }
+  }
+
+  _toLogical(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (LOGICAL_W / rect.width),
+      y: (e.clientY - rect.top) * (LOGICAL_H / rect.height),
+    };
+  }
+
+  _onPointerDown(e) {
+    e.preventDefault();
+    this.audio.unlock();
+    this.pointerDown = true;
+    const p = this._toLogical(e);
+
+    if (this.state === STATE.INTRO) {
+      this._startGame();
+      return;
+    }
+
+    if (this.quizActive) {
+      this._handleQuizTap(p);
+      return;
+    }
+
+    if (this.state === STATE.GAMEOVER || this.state === STATE.WON) {
+      // Any tap restarts — friendlier for kids than aiming at the button.
+      this._startGame();
+      return;
+    }
+
+    if (this.state === STATE.PLAYING) {
+      // Hold left / right half of the screen to move (touch friendly).
+      if (p.x < LOGICAL_W / 2) {
+        this.keys.left = true;
+        this.keys.right = false;
+      } else {
+        this.keys.right = true;
+        this.keys.left = false;
+      }
+    }
+  }
+
+  _onPointerUp() {
+    this.pointerDown = false;
+    this.keys.left = false;
+    this.keys.right = false;
+  }
+
+  _onPointerMove(e) {
+    // While a finger is held and dragged across the centre, keep the
+    // movement side in sync with the pointer position.
+    if (this.pointerDown && this.state === STATE.PLAYING && !this.quizActive) {
+      const p = this._toLogical(e);
+      if (p.x < LOGICAL_W / 2) {
+        this.keys.left = true;
+        this.keys.right = false;
+      } else {
+        this.keys.right = true;
+        this.keys.left = false;
+      }
+    }
+  }
+
+  _onKeyDown(e) {
+    const k = e.key;
+    if (["ArrowLeft", "ArrowRight", " ", "Enter"].includes(k)) e.preventDefault();
+
+    this.audio.unlock();
+
+    if (this.state === STATE.INTRO) {
+      if (k === "Enter" || k === " ") this._startGame();
+      return;
+    }
+
+    if (this.quizActive) {
+      const map = { a: 0, A: 0, b: 1, B: 1, c: 2, C: 2 };
+      if (k in map) this._evaluateQuiz(map[k]);
+      else if (this.quizResult) this._dismissQuiz();
+      return;
+    }
+
+    if (this.state === STATE.GAMEOVER || this.state === STATE.WON) {
+      if (k === "Enter" || k === " " || k === "r" || k === "R") this._startGame();
+      return;
+    }
+
+    if (this.state === STATE.PLAYING) {
+      if (k === "ArrowLeft" || k === "a" || k === "A") this.keys.left = true;
+      if (k === "ArrowRight" || k === "d" || k === "D") this.keys.right = true;
+    }
+  }
+
+  _onKeyUp(e) {
+    const k = e.key;
+    if (k === "ArrowLeft" || k === "a" || k === "A") this.keys.left = false;
+    if (k === "ArrowRight" || k === "d" || k === "D") this.keys.right = false;
+  }
+
+  _hit(p, rect) {
+    return p.x >= rect.x && p.x <= rect.x + rect.w &&
+           p.y >= rect.y && p.y <= rect.y + rect.h;
+  }
+
+  /* --------------------------- State changes --------------------------- */
+
+  _resetPlayerPosition() {
+    this.kid.x = (LOGICAL_W - this.kid.w) / 2;
+    this.kid.y = LOGICAL_H - 26;
+    this.kid.facingRight = true;
+    this.kid.bobTimer = 0;
+  }
+
+  _startGame() {
+    this.state = STATE.PLAYING;
+    this.items = [];
+    this.itemsCaught = 0;
+    this.quizCounter = 0;
+    this.ecoActions = 0;
+    this.score = 0;
+    this.health = STARTING_HEALTH;
+    this.lives = STARTING_LIVES;
+    this.gameWon = false;
+    this.timeUp = false;
+    this.elapsed = 0;
+    this.quizActive = false;
+    this.quiz = null;
+    this.quizResult = null;
+    this.cleanMode = false;
+    this.cleanMsgTimer = 0;
+    this.frozen = false;
+    this.freezeRemaining = 0;
+    this.freezeParticles = [];
+    this._resetPlayerPosition();
+    this.audio.playMusic("polluted");
+  }
+
+  _winGame() {
+    this.gameWon = true;
+    this.health = 100;
+    this.state = STATE.WON;
+    this.winStartTime = this.elapsed;
+    this.winParticles = [];
+    for (let i = 0; i < 120; i++) this._spawnWinParticle(true);
+    this.audio.play("celebration");
+    this.audio.playMusic("clean");
+  }
+
+  _gameOver() {
+    this.state = STATE.GAMEOVER;
+    this.audio.stopMusic();
+  }
+
+  /* ---------------------------- Quiz logic ----------------------------- */
+
+  _triggerQuiz() {
+    this.quizActive = true;
+    this.quizResult = null;
+    this.quizOptionRects = [];
+    this.quiz = this.cleanMode
+      ? pick(ECO_QUIZZES)
+      : pick(ECO_QUIZZES.concat(MATH_QUIZZES));
+    this.audio.play("quiz");
+  }
+
+  _handleQuizTap(p) {
+    if (this.quizResult) {
+      this._dismissQuiz();
+      return;
+    }
+    for (let i = 0; i < this.quizOptionRects.length; i++) {
+      if (this._hit(p, this.quizOptionRects[i])) {
+        this._evaluateQuiz(i);
+        return;
+      }
+    }
+  }
+
+  _evaluateQuiz(i) {
+    if (i === this.quiz.answer) {
+      this.quizResult = "correct";
+      this.score += 6;
+      this.health = clamp(this.health + 6, 0, 100);
+      this.ecoActions += 1;
+      this.audio.play("good");
+    } else {
+      this.quizResult = "wrong";
+      this.audio.play("bad");
+    }
+  }
+
+  _dismissQuiz() {
+    this.quizActive = false;
+    this.quiz = null;
+    this.quizResult = null;
+    this.quizOptionRects = [];
+  }
+
+  /* --------------------------- Gameplay logic -------------------------- */
+
+  _spawnItem() {
+    const r = Math.random();
+    let type;
+    if (r < 0.50) type = "good";
+    else if (r < 0.88) type = "bad";
+    else type = "ice";
+
+    let sprite;
+    if (type === "good") sprite = ASSETS.images[`good_${randInt(1, 10)}`];
+    else if (type === "bad") sprite = ASSETS.images[`bad_${randInt(1, 10)}`];
+    else sprite = ASSETS.images.ice;
+
+    const x = rand(0, LOGICAL_W - ITEM_SIZE);
+    this.items.push({
+      type,
+      sprite,
+      x,
+      y: -ITEM_SIZE,
+      w: ITEM_SIZE,
+      h: ITEM_SIZE,
+    });
+  }
+
+  _kidRect(pad = 0) {
+    return {
+      x: this.kid.x + this.kid.w * (pad / 2),
+      y: this.kid.y - this.kid.h * (1 - pad / 2),
+      w: this.kid.w * (1 - pad),
+      h: this.kid.h * (1 - pad),
+    };
+  }
+
+  _rectsOverlap(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x &&
+           a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  _handleCatch(item) {
+    this.itemsCaught += 1;
+
+    if (item.type === "good") {
+      this.score += 1;
+      this.health = clamp(this.health + 1, 0, 100);
+      this.ecoActions += 1;
+      this.kid.flashType = 1;
+      this.kid.flashTimer = 18;
+      this.kid.squash = 0.75;
+      this.kid.squashTimer = 10;
+      this.audio.play("good");
+    } else if (item.type === "bad") {
+      this.score = Math.max(0, this.score - 1);
+      this.health = clamp(this.health - 3, 0, 100);
+      this.lives -= 1;
+      this.kid.flashType = 2;
+      this.kid.flashTimer = 18;
+      this.audio.play("bad");
+    } else if (item.type === "ice") {
+      this.frozen = true;
+      this.freezeRemaining = FREEZE_SECONDS;
+      this.freezeParticles = [];
+      this.kid.flashType = 3;   // icy-blue tint
+      this.kid.flashTimer = 18;
+      this.audio.playFreeze();
+    }
+
+    if (item.type !== "ice") {
+      this.quizCounter += 1;
+      if (this.quizCounter % QUIZ_INTERVAL === 0) {
+        this._triggerQuiz();
+      }
+    }
+
+    if (this.lives <= 0 || this.health <= 0) {
+      this._gameOver();
+      return;
+    }
+    if (this.health >= 100) {
+      this._winGame();
+    }
+  }
+
+  _update(dt) {
+    if (this.state === STATE.INTRO) {
+      this._updateIntro(dt);
+      return;
+    }
+
+    if (this.state === STATE.WON) {
+      this._updateWinParticles(dt);
+      return;
+    }
+
+    if (this.state === STATE.GAMEOVER) {
+      return;
+    }
+
+    // PLAYING ------------------------------------------------------------
+    if (this.timeUp) return;
+
+    // Global mission clock pauses only while a quiz is open.
+    if (!this.quizActive) {
+      this.elapsed += dt;
+    }
+
+    if (this.elapsed >= GAME_DURATION) {
+      this.timeUp = true;
+      this._gameOver();
+      return;
+    }
+
+    // Music follows the environment.
+    this.audio.playMusic(this.cleanMode ? "clean" : "polluted");
+
+    if (!this.quizActive) {
+      this._updateKid(dt);
+      this._updateItems(dt);
+      this._updateFreeze(dt);
+      this._checkCleanMode();
+    }
+
+    if (this.cleanMsgTimer > 0) this.cleanMsgTimer -= dt;
+  }
+
+  _updateKid(dt) {
+    const speed = 760; // px / second
+    const frozen = this.frozen;
+
+    if (!frozen) {
+      if (this.keys.right) {
+        this.kid.facingRight = true;
+        this.kid.x += speed * dt;
+      } else if (this.keys.left) {
+        this.kid.facingRight = false;
+        this.kid.x -= speed * dt;
+      }
+    }
+
+    this.kid.x = clamp(this.kid.x, 4, LOGICAL_W - this.kid.w - 4);
+
+    const isMoving = !frozen && (this.keys.left || this.keys.right);
+    this.kid.bobTimer += dt;
+    const offset = isMoving
+      ? Math.sin(this.kid.bobTimer * 10.8) * 5
+      : Math.sin(this.kid.bobTimer * 0.9) * 2;
+
+    // We'll apply the bob as a visual offset at draw time.
+    this.kid.bobOffset = offset;
+
+    if (this.kid.flashTimer > 0) this.kid.flashTimer -= 1;
+    else this.kid.flashType = 0;
+
+    if (this.kid.squashTimer > 0) {
+      this.kid.squashTimer -= 1;
+      this.kid.squash = 1 - 0.25 * (this.kid.squashTimer / 10);
+    } else {
+      this.kid.squash = 1;
+    }
+  }
+
+  _updateItems(dt) {
+    const spawnPerSec = 1.2;
+    if (Math.random() < spawnPerSec * dt) this._spawnItem();
+
+    const fallSpeed = this.cleanMode ? 720 : 660;
+    const caught = [];
+    const playerRect = this._kidRect(0.28);
+
+    for (const item of this.items) {
+      item.y += fallSpeed * dt;
+      const itemRect = { x: item.x, y: item.y, w: item.w, h: item.h };
+      if (this._rectsOverlap(playerRect, itemRect)) {
+        caught.push(item);
+      }
+    }
+
+    // Remove off-screen and caught items.
+    this.items = this.items.filter(
+      (it) => !caught.includes(it) && it.y < LOGICAL_H + it.h
+    );
+
+    for (const item of caught) this._handleCatch(item);
+  }
+
+  _updateFreeze(dt) {
+    if (!this.frozen) return;
+
+    this.freezeRemaining -= dt;
+
+    // Spawn falling snow / sparkle particles around the kid.
+    if (Math.random() < 30 * dt) {
+      this.freezeParticles.push({
+        x: this.kid.x + rand(0, this.kid.w),
+        y: this.kid.y - rand(0, this.kid.h),
+        vy: rand(30, 70),
+        size: rand(2, 5),
+        life: rand(0.6, 1.2),
+        age: 0,
+      });
+    }
+
+    for (const p of this.freezeParticles) {
+      p.age += dt;
+      p.y += p.vy * dt;
+      p.x += Math.sin((p.age + p.size) * 6) * 18 * dt;
+    }
+    this.freezeParticles = this.freezeParticles.filter((p) => p.age < p.life);
+
+    if (this.freezeRemaining <= 0) {
+      this.frozen = false;
+      this.freezeRemaining = 0;
+      this.freezeParticles = [];
+    }
+  }
+
+  _checkCleanMode() {
+    if (!this.cleanMode && this.ecoActions >= CLEAN_ECO_THRESHOLD) {
+      this.cleanMode = true;
+      this.cleanMsgTimer = 3;
+      this.audio.playMusic("clean");
+    }
+  }
+
+  /* ------------------------------- Intro ------------------------------- */
+
+  _updateIntro(dt) {
+    this.introLineTime += dt;
+    const hold = 3.0;
+    if (this.introLineTime >= hold && this.introLineIndex < INTRO_STORY_LINES.length) {
+      this.introLineTime = 0;
+      this.introLineIndex += 1;
+      if (this.introLineIndex >= INTRO_STORY_LINES.length) {
+        this.introLineIndex = INTRO_STORY_LINES.length - 1; // stay on last line
+      }
+    }
+  }
+
+  /* ------------------------------ Win screen --------------------------- */
+
+  _spawnWinParticle(burst) {
+    const colors = ["#ffdc32", "#64ff78", "#50c8ff", "#ff78b4", "#ffffff", "#b4ff64"];
+    this.winParticles.push({
+      x: rand(0, LOGICAL_W),
+      y: burst ? rand(-40, LOGICAL_H / 2) : rand(-80, -10),
+      vx: rand(-1.5, 1.5) * 60,
+      vy: rand(1.5, 4.5) * 60,
+      size: rand(4, 12),
+      color: pick(colors),
+      alpha: 1,
+      shape: pick(["circle", "rect", "star"]),
+      angle: rand(0, 360),
+      spin: rand(-4, 4) * 60,
+    });
+  }
+
+  _updateWinParticles(dt) {
+    this.winElapsed += dt;
+    if (Math.random() < 3 * dt) this._spawnWinParticle(false);
+    for (const p of this.winParticles) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.angle += p.spin * dt;
+      p.alpha -= 0.5 * dt;
+    }
+    this.winParticles = this.winParticles.filter(
+      (p) => p.y < LOGICAL_H + 20 && p.alpha > 0
+    );
+  }
+
+  /* ------------------------------- Render ------------------------------ */
+
+  _startLoop() {
+    this.lastTime = performance.now();
+    const frame = (now) => {
+      const dt = clamp((now - this.lastTime) / 1000, 0, 0.05);
+      this.lastTime = now;
+      this._update(dt);
+      this._render();
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }
+
+  _render() {
+    const ctx = this.ctx;
+    ctx.clearRect(0, 0, LOGICAL_W, LOGICAL_H);
+
+    switch (this.state) {
+      case STATE.INTRO:    this._drawIntro(); break;
+      case STATE.PLAYING:  this._drawPlaying(); break;
+      case STATE.WON:      this._drawWin(); break;
+      case STATE.GAMEOVER: this._drawPlaying(); this._drawGameOver(); break;
+    }
+  }
+
+  _drawImageCover(img, w, h) {
+    const scale = Math.max(w / img.width, h / img.height);
+    const dw = img.width * scale;
+    const dh = img.height * scale;
+    this.ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+  }
+
+  _drawIntro() {
+    const ctx = this.ctx;
+    const t = performance.now() / 1000;
+
+    // 1. Universe background
+    this._drawImageCover(ASSETS.images.introUniverse, LOGICAL_W, LOGICAL_H);
+
+    // 2. Earth image, centred, with a pulsing rim
+    const earth = ASSETS.images.introEarth;
+    const ew = Math.min(LOGICAL_W * 0.46, earth.width * 0.62);
+    const eh = ew * (earth.height / earth.width);
+    const ex = (LOGICAL_W - ew) / 2;
+    const ey = LOGICAL_H * 0.16;
+
+    const glow = 0.5 + 0.5 * Math.sin(t * 1.6);
+    ctx.save();
+    ctx.shadowColor = `rgba(90, 190, 255, ${0.35 + glow * 0.3})`;
+    ctx.shadowBlur = 50 + glow * 30;
+    ctx.drawImage(earth, ex, ey, ew, eh);
+    ctx.restore();
+
+    // 3. Title
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.font = "700 54px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#0a0e19";
+    ctx.fillText("SuperKid Saves the Planet", LOGICAL_W / 2 + 3, 62 + 3);
+    const grad = ctx.createLinearGradient(0, 20, 0, 78);
+    grad.addColorStop(0, "#a5f3ff");
+    grad.addColorStop(1, "#7be07b");
+    ctx.fillStyle = grad;
+    ctx.fillText("SuperKid Saves the Planet", LOGICAL_W / 2, 62);
+
+    // 4. Story subtitle (one line at a time)
+    let line;
+    if (this.introLineIndex < INTRO_STORY_LINES.length) {
+      line = INTRO_STORY_LINES[this.introLineIndex];
+    }
+    if (line !== undefined) {
+      const lineAge = this.introLineTime;
+      const alpha = clamp(Math.min(lineAge / 0.5, (3.0 - lineAge) / 0.5), 0, 1);
+      if (alpha > 0) {
+        const isDanger = /DANGER|smoke|chokes|lose|crying|longer|Plastic|Animals/.test(line);
+        const isHope = /HOPE|YOU|SAVE|difference|Collect|answer|hero|ready/.test(line);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        const color = isDanger ? "#e8a0a0" : isHope ? "#9fe8c8" : "#d8e0ee";
+        const subY = ey + eh + 30;
+        const fs = 30;
+        ctx.font = `700 ${fs}px 'Comic Neue', 'Comic Sans MS', sans-serif`;
+        const tw = ctx.measureText(line).width;
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        roundedRect(ctx, LOGICAL_W / 2 - tw / 2 - 24, subY - fs - 6, tw + 48, fs + 22, 14);
+        ctx.fill();
+        ctx.fillStyle = color;
+        ctx.fillText(line, LOGICAL_W / 2, subY);
+        ctx.restore();
+      }
+    }
+
+    // 5. Pulsing "begin" prompt
+    const pulse = 0.65 + 0.35 * Math.sin(t * 3.0);
+    ctx.font = "700 30px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    const msg = "Press ENTER or tap anywhere to Begin!";
+    ctx.fillStyle = `rgba(${Math.round(160 * pulse + 60)}, ${Math.round(200 * pulse + 40)}, ${Math.round(230 * pulse + 25)}, 1)`;
+    ctx.fillText(msg, LOGICAL_W / 2, LOGICAL_H * 0.9);
+  }
+
+  _drawPlaying() {
+    const ctx = this.ctx;
+
+    // Background
+    this._drawImageCover(
+      this.cleanMode ? ASSETS.images.cleanBg : ASSETS.images.pollutedBg,
+      LOGICAL_W,
+      LOGICAL_H
+    );
+
+    // Items
+    for (const item of this.items) {
+      ctx.drawImage(item.sprite, item.x, item.y, item.w, item.h);
+    }
+
+    // Kid
+    this._drawKid();
+
+    // Freeze particles + overlay
+    if (this.frozen) this._drawFreezeEffects();
+
+    // HUD
+    this._drawHud();
+
+    // Clean-mode unlock message
+    if (this.cleanMsgTimer > 0) this._drawCleanMessage();
+
+    // Quiz
+    if (this.quizActive) this._drawQuiz();
+  }
+
+  _drawKid() {
+    const ctx = this.ctx;
+    const kid = this.kid;
+
+    // Ground shadow
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.beginPath();
+    ctx.ellipse(
+      kid.x + kid.w / 2,
+      LOGICAL_H - 10,
+      kid.w * 0.36,
+      8,
+      0, 0, Math.PI * 2
+    );
+    ctx.fill();
+    ctx.restore();
+
+    const bob = kid.bobOffset || 0;
+    const drawW = kid.w;
+    const drawH = kid.h * kid.squash;
+    const drawX = kid.x;
+    const drawY = kid.y - drawH + bob; // feet stay anchored
+
+    ctx.save();
+    ctx.translate(drawX + drawW / 2, drawY + drawH / 2);
+    if (!kid.facingRight) ctx.scale(-1, 1);
+
+    // Draw the base sprite (with a tint for flash effects).
+    const flash = this._flashedSprite(ASSETS.images.player, kid);
+    ctx.drawImage(flash, -drawW / 2, -drawH / 2, drawW, drawH);
+    ctx.restore();
+  }
+
+  /* Returns the player image with a translucent colour tint applied. */
+  _flashedSprite(base, kid) {
+    if (kid.flashType === 0 || kid.flashTimer <= 0) return base;
+
+    const color = kid.flashType === 1 ? "80,255,130"
+                : kid.flashType === 2 ? "255,80,80"
+                : "130,210,255"; // ice
+
+    // Pulsing blink (on/off a few times).
+    const pulse = kid.flashTimer % 6;
+    if (pulse >= 3) return base;
+
+    if (!this._flashCache || this._flashCache.key !== kid.flashType) {
+      const c = document.createElement("canvas");
+      c.width = base.width;
+      c.height = base.height;
+      const cctx = c.getContext("2d");
+      cctx.drawImage(base, 0, 0);
+      cctx.globalCompositeOperation = "source-atop";
+      cctx.fillStyle = `rgba(${color},0.6)`;
+      cctx.fillRect(0, 0, c.width, c.height);
+      this._flashCache = { key: kid.flashType, canvas: c };
+    }
+    return this._flashCache.canvas;
+  }
+
+  _drawFreezeEffects() {
+    const ctx = this.ctx;
+    const kid = this.kid;
+
+    // Icy blue vignette over the whole screen.
+    ctx.save();
+    ctx.fillStyle = "rgba(80, 170, 240, 0.12)";
+    ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+    ctx.restore();
+
+    // Falling snow particles.
+    for (const p of this.freezeParticles) {
+      ctx.save();
+      ctx.globalAlpha = clamp(1 - p.age / p.life, 0, 1);
+      ctx.fillStyle = "#dff4ff";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Ice block around the kid.
+    ctx.save();
+    const ix = kid.x - 12;
+    const iy = kid.y - kid.h - 14;
+    const iw = kid.w + 24;
+    const ih = kid.h + 30;
+    ctx.fillStyle = "rgba(150, 220, 255, 0.28)";
+    ctx.strokeStyle = "rgba(220, 245, 255, 0.9)";
+    ctx.lineWidth = 4;
+    roundedRect(ctx, ix, iy, iw, ih, 18);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // Countdown label.
+    const secs = Math.ceil(this.freezeRemaining);
+    ctx.textAlign = "center";
+    ctx.font = "700 42px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#0a1a2e";
+    ctx.fillText("FROZEN!", LOGICAL_W / 2 + 2, 108 + 2);
+    ctx.fillStyle = "#bfeaff";
+    ctx.fillText("FROZEN!", LOGICAL_W / 2, 108);
+    ctx.font = "700 28px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(`Thawing in ${secs}…`, LOGICAL_W / 2, 148);
+  }
+
+  _drawHud() {
+    const ctx = this.ctx;
+    const pad = 14;
+
+    // Health card + bar
+    const healthColor = this.health >= 70 ? "#3cdc5a" : this.health >= 35 ? "#ffc83c" : "#ff5050";
+    this._hudCard("PLANET HEALTH  " + this.health + "%", 18, 18, "#14783c");
+    const barW = 220;
+    const barH = 16;
+    ctx.fillStyle = "#e6e6e6";
+    roundedRect(ctx, 18, 64, barW, barH, 8);
+    ctx.fill();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 3;
+    roundedRect(ctx, 18, 64, barW, barH, 8);
+    ctx.stroke();
+    const fillW = (barW - 4) * clamp(this.health / 100, 0, 1);
+    if (fillW > 0) {
+      ctx.fillStyle = healthColor;
+      roundedRect(ctx, 20, 66, fillW, barH - 4, 6);
+      ctx.fill();
+    }
+
+    // Eco progress toward a clean planet
+    this._hudCard("CLEAN ENERGY  " + this.ecoActions + "/" + CLEAN_ECO_THRESHOLD, 18, 94, "#7a5a1e");
+
+    // Lives
+    this._hudCard("LIVES  " + this.lives, 18, 150, "#285ab4");
+
+    // Score
+    this._hudCard("SCORE  " + this.score, 18, 206, "#a05a1e");
+
+    // Timer (top centre)
+    const remaining = Math.max(0, GAME_DURATION - this.elapsed);
+    const m = Math.floor(remaining / 60);
+    const s = Math.floor(remaining % 60);
+    const label = this.timeUp ? "TIME UP!" : `Time: ${m}:${String(s).padStart(2, "0")}`;
+    const color = this.timeUp ? "#ff3c3c" : remaining > 60 ? "#64ff64" : remaining > 30 ? "#ffc832" : "#ff3c3c";
+    ctx.textAlign = "center";
+    ctx.font = "700 42px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#000000";
+    ctx.fillText(label, LOGICAL_W / 2 + 2, 44 + 2);
+    ctx.fillStyle = color;
+    ctx.fillText(label, LOGICAL_W / 2, 44);
+  }
+
+  _hudCard(text, x, y, fill) {
+    const ctx = this.ctx;
+    ctx.font = "700 22px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    const w = ctx.measureText(text).width + 20;
+    const h = 34;
+    ctx.fillStyle = fill;
+    roundedRect(ctx, x, y, w, h, 12);
+    ctx.fill();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2.5;
+    roundedRect(ctx, x, y, w, h, 12);
+    ctx.stroke();
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "left";
+    ctx.fillText(text, x + 10, y + 25);
+  }
+
+  _drawCleanMessage() {
+    const ctx = this.ctx;
+    const alpha = clamp(this.cleanMsgTimer / 0.4, 0, 1);
+    const t = performance.now() / 1000;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.textAlign = "center";
+    ctx.font = "700 52px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    const msg = "CLEAN ENVIRONMENT UNLOCKED!";
+    const y = LOGICAL_H / 2 - 40;
+    ctx.fillStyle = "rgba(10,40,10,0.65)";
+    roundedRect(ctx, LOGICAL_W / 2 - 430, y - 60, 860, 90, 20);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(${120 + Math.sin(t * 4) * 60}, 255, ${120 + Math.sin(t * 4) * 40}, ${alpha})`;
+    ctx.lineWidth = 4;
+    roundedRect(ctx, LOGICAL_W / 2 - 430, y - 60, 860, 90, 20);
+    ctx.stroke();
+    ctx.fillStyle = "#9fff9f";
+    ctx.fillText(msg, LOGICAL_W / 2, y);
+    ctx.restore();
+  }
+
+  _drawQuiz() {
+    const ctx = this.ctx;
+    const pw = 720;
+    const ph = 440;
+    const px = (LOGICAL_W - pw) / 2;
+    const py = (LOGICAL_H - ph) / 2;
+
+    // Dim the play area.
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+
+    // Panel
+    ctx.fillStyle = "rgba(10,40,10,0.94)";
+    roundedRect(ctx, px, py, pw, ph, 18);
+    ctx.fill();
+    ctx.strokeStyle = "#50c850";
+    ctx.lineWidth = 4;
+    roundedRect(ctx, px, py, pw, ph, 18);
+    ctx.stroke();
+
+    ctx.textAlign = "left";
+    ctx.font = "700 34px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#64ff64";
+    ctx.fillText("ECO QUIZ TIME!", px + 22, py + 46);
+
+    ctx.font = "700 28px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#ffffc8";
+    this._wrapText(ctx, this.quiz.question, px + 22, py + 92, pw - 44, 34);
+
+    if (this.quizResult === null) {
+      this.quizOptionRects = [];
+      const labels = ["A", "B", "C"];
+      for (let i = 0; i < this.quiz.options.length; i++) {
+        const oy = py + 170 + i * 78;
+        const rect = { x: px + 40, y: oy, w: pw - 80, h: 60 };
+        this.quizOptionRects.push(rect);
+        ctx.fillStyle = "#146414";
+        roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 12);
+        ctx.fill();
+        ctx.strokeStyle = "#50c850";
+        ctx.lineWidth = 2.5;
+        roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 12);
+        ctx.stroke();
+
+        ctx.fillStyle = "#ffd66b";
+        ctx.font = "700 26px 'Comic Neue', 'Comic Sans MS', sans-serif";
+        ctx.fillText(labels[i], rect.x + 18, rect.y + 40);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(this.quiz.options[i].replace(/^[A-C]:\s*/, ""), rect.x + 58, rect.y + 40);
+      }
+
+      ctx.font = "400 19px 'Comic Neue', 'Comic Sans MS', sans-serif";
+      ctx.fillStyle = "#9a9a9a";
+      ctx.textAlign = "center";
+      ctx.fillText("Press A / B / C or tap an answer", LOGICAL_W / 2, py + ph - 18);
+    } else {
+      ctx.textAlign = "left";
+      if (this.quizResult === "correct") {
+        ctx.font = "700 36px 'Comic Neue', 'Comic Sans MS', sans-serif";
+        ctx.fillStyle = "#50ff50";
+        ctx.fillText("Correct! +6 bonus points!", px + 40, py + 200);
+      } else {
+        ctx.font = "700 36px 'Comic Neue', 'Comic Sans MS', sans-serif";
+        ctx.fillStyle = "#ff5050";
+        ctx.fillText("Not quite!", px + 40, py + 200);
+      }
+
+      ctx.font = "400 22px 'Comic Neue', 'Comic Sans MS', sans-serif";
+      ctx.fillStyle = "#ffe664";
+      this._wrapText(ctx, this.quiz.hint, px + 40, py + 260, pw - 80, 28);
+
+      ctx.font = "400 19px 'Comic Neue', 'Comic Sans MS', sans-serif";
+      ctx.fillStyle = "#cccccc";
+      ctx.textAlign = "center";
+      ctx.fillText("Press any key or tap to continue", LOGICAL_W / 2, py + ph - 24);
+    }
+  }
+
+  _wrapText(ctx, text, x, y, maxWidth, lineHeight) {
+    const words = text.split(" ");
+    let line = "";
+    let yy = y;
+    for (const word of words) {
+      const test = line ? line + " " + word : word;
+      if (ctx.measureText(test).width > maxWidth && line) {
+        ctx.fillText(line, x, yy);
+        line = word;
+        yy += lineHeight;
+      } else {
+        line = test;
+      }
+    }
+    if (line) ctx.fillText(line, x, yy);
+  }
+
+  _drawGameOver() {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+
+    ctx.textAlign = "center";
+    ctx.font = "700 58px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#0a0e19";
+    ctx.fillText("MISSION OVER", LOGICAL_W / 2 + 3, LOGICAL_H / 2 - 40 + 3);
+    ctx.fillStyle = "#ffd66b";
+    ctx.fillText("MISSION OVER", LOGICAL_W / 2, LOGICAL_H / 2 - 40);
+
+    const reason = this.timeUp
+      ? "Time ran out!"
+      : this.lives <= 0
+        ? "The planet needs you!"
+        : "Keep practicing, Super Kid!";
+    ctx.font = "400 30px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(reason, LOGICAL_W / 2, LOGICAL_H / 2 + 14);
+
+    ctx.font = "400 26px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#d8e0ee";
+    ctx.fillText(`Final score: ${this.score}`, LOGICAL_W / 2, LOGICAL_H / 2 + 58);
+
+    // Play again button
+    const bw = 260;
+    const bh = 74;
+    const bx = LOGICAL_W / 2 - bw / 2;
+    const by = LOGICAL_H / 2 + 92;
+    this.playAgainRect = { x: bx, y: by, w: bw, h: bh };
+    ctx.fillStyle = "#00c800";
+    roundedRect(ctx, bx, by, bw, bh, 16);
+    ctx.fill();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 3;
+    roundedRect(ctx, bx, by, bw, bh, 16);
+    ctx.stroke();
+    ctx.font = "700 32px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText("Play Again", LOGICAL_W / 2, by + 48);
+
+    ctx.font = "400 20px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#b8c0d0";
+    ctx.fillText("or press ENTER", LOGICAL_W / 2, by + bh + 30);
+  }
+
+  _drawWin() {
+    const ctx = this.ctx;
+    const t = performance.now() / 1000;
+
+    // Sunrise gradient background.
+    const grad = ctx.createLinearGradient(0, 0, 0, LOGICAL_H);
+    grad.addColorStop(0, "#0a1e3c");
+    grad.addColorStop(0.5, "#1e8fc9");
+    grad.addColorStop(1, "#9fdfea");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+
+    // Confetti
+    for (const p of this.winParticles) {
+      ctx.save();
+      ctx.globalAlpha = clamp(p.alpha, 0, 1);
+      ctx.translate(p.x, p.y);
+      ctx.rotate((p.angle * Math.PI) / 180);
+      ctx.fillStyle = p.color;
+      if (p.shape === "circle") {
+        ctx.beginPath();
+        ctx.arc(0, 0, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (p.shape === "rect") {
+        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+      } else {
+        ctx.fillRect(-p.size / 2, -p.size, p.size / 2, p.size * 2);
+        ctx.fillRect(-p.size, -p.size / 2, p.size * 2, p.size / 2);
+      }
+      ctx.restore();
+    }
+
+    // Clean Earth with glow.
+    const earth = ASSETS.images.winEarth;
+    const eh = LOGICAL_H * 0.46;
+    const ew = eh * (earth.width / earth.height);
+    const ex = (LOGICAL_W - ew) / 2;
+    const ey = LOGICAL_H * 0.07;
+    ctx.save();
+    ctx.shadowColor = "rgba(80,220,80,0.6)";
+    ctx.shadowBlur = 50 + Math.sin(t * 1.8) * 14;
+    ctx.drawImage(earth, ex, ey, ew, eh);
+    ctx.restore();
+
+    // Headline
+    ctx.textAlign = "center";
+    const shimmer = Math.round(Math.sin(t * 3) * 30);
+    ctx.font = "700 56px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#143c14";
+    ctx.fillText("CONGRATULATIONS, SUPERKID!", LOGICAL_W / 2 + 3, ey + eh + 58 + 3);
+    ctx.fillStyle = `rgb(${80 + shimmer}, 255, ${80 + shimmer})`;
+    ctx.fillText("CONGRATULATIONS, SUPERKID!", LOGICAL_W / 2, ey + eh + 58);
+
+    // Win lines (staggered fade in)
+    const elapsed = this.winElapsed;
+    let lineY = ey + eh + 98;
+    WIN_LINES.forEach((line, i) => {
+      const alpha = clamp((elapsed - i * 0.3) / 0.4, 0, 1);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.font = "700 28px 'Comic Neue', 'Comic Sans MS', sans-serif";
+      ctx.fillStyle = i === 0 ? "#ffdc3c" : "#e6f5ff";
+      ctx.fillText(line, LOGICAL_W / 2, lineY);
+      ctx.restore();
+      lineY += 36;
+    });
+
+    // Score summary
+    ctx.font = "700 30px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(`Final score: ${this.score}`, LOGICAL_W / 2, lineY + 18);
+
+    // Play again button
+    const bw = 260;
+    const bh = 74;
+    const bx = LOGICAL_W / 2 - bw / 2;
+    const by = lineY + 40;
+    this.playAgainRect = { x: bx, y: by, w: bw, h: bh };
+    ctx.fillStyle = "#00b33c";
+    roundedRect(ctx, bx, by, bw, bh, 16);
+    ctx.fill();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 3;
+    roundedRect(ctx, bx, by, bw, bh, 16);
+    ctx.stroke();
+    ctx.font = "700 32px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText("Play Again", LOGICAL_W / 2, by + 48);
+
+    const pulse = 0.7 + 0.3 * Math.sin(t * 3.2);
+    ctx.font = "400 20px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = `rgba(${200 * pulse}, 255, ${200 * pulse}, 1)`;
+    ctx.fillText("or press ENTER", LOGICAL_W / 2, by + bh + 30);
+  }
+}
+
+/* ------------------------------ Bootstrap ------------------------------ */
+
+window.addEventListener("DOMContentLoaded", () => {
+  const canvas = document.getElementById("game");
+  const game = new Game(canvas);
+  game.init().catch((err) => {
+    console.error(err);
+    // If assets fail, still show a friendly error on the canvas.
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#10142a";
+    ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "28px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Could not load game assets.", LOGICAL_W / 2, LOGICAL_H / 2);
+  });
+});
