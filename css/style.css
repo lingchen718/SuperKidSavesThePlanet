@@ -14,6 +14,8 @@ html, body {
   background: radial-gradient(120% 120% at 50% 0%, #14234e 0%, var(--bg-1) 55%, #05070f 100%);
   font-family: "Comic Neue", "Comic Sans MS", "Chalkboard SE", system-ui, sans-serif;
   -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -33,21 +35,29 @@ html, body {
 
 #app {
   position: relative;
-  height: 100%;
+  height: 100vh;
+  height: 100dvh;          /* mobile dynamic viewport (address bar aware) */
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-/* Canvas keeps a 4:3 game area and letterboxes gracefully on any screen. */
+/* Stage wraps the canvas + overlay controls and matches the canvas size. */
+#stage {
+  position: relative;
+  flex: 0 0 auto;
+  line-height: 0;
+}
+
+/* The 4:3 game area scales to fit any screen and letterboxes gracefully. */
 #game {
   display: block;
-  /* Keep a 4:3 play area that fits the viewport without stretching. */
   width: min(100vw, calc(100vh * 4 / 3));
+  width: min(100vw, calc(100dvh * 4 / 3));  /* address-bar aware on mobile */
   height: auto;
   max-width: 100%;
-  max-height: 100vh;
+  max-height: 100%;
   border-radius: 14px;
   box-shadow: 0 0 0 3px rgba(255,255,255,0.08), 0 24px 80px rgba(0,0,0,0.6), 0 0 60px rgba(123,224,123,0.15);
   background: #000;
@@ -55,36 +65,41 @@ html, body {
   outline: none;
 }
 
-.mute,
-.pause {
+/* Overlay controls — always anchored to the top-right corner of the game. */
+.controls {
   position: absolute;
-  top: 14px;
-  width: 48px;
-  height: 48px;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  display: flex;
+  gap: 8px;
+  z-index: 5;
+}
+
+.pause,
+.mute {
+  width: clamp(40px, 7vw, 50px);
+  height: clamp(40px, 7vw, 50px);
   border-radius: 50%;
   border: 2px solid rgba(255,255,255,0.25);
   background: rgba(10, 14, 28, 0.72);
   color: #fff;
-  font-size: 22px;
+  font-size: clamp(18px, 4vw, 22px);
   line-height: 1;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: transform .12s ease, background .12s ease;
-  z-index: 5;
+  touch-action: manipulation;
 }
-.pause { right: 72px; }
-.mute { right: 14px; }
-.mute:hover,
-.pause:hover { transform: scale(1.08); background: rgba(30, 40, 70, 0.9); }
-.mute:active,
-.pause:active { transform: scale(0.96); }
-
+.pause:hover,
+.mute:hover { transform: scale(1.08); background: rgba(30, 40, 70, 0.9); }
+.pause:active,
+.mute:active { transform: scale(0.96); }
 
 #hint {
   position: absolute;
-  bottom: 10px;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   left: 50%;
   transform: translateX(-50%);
   margin: 0;
@@ -96,10 +111,17 @@ html, body {
   letter-spacing: .2px;
   pointer-events: none;
   white-space: nowrap;
+  max-width: 92vw;
+  text-align: center;
   z-index: 4;
 }
 #hint b { color: #ffd66b; }
 
+/* Smaller screens: smaller buttons + a compact, wrap-friendly hint. */
 @media (max-width: 640px) {
-  #hint { font-size: 12px; white-space: normal; text-align: center; max-width: 92vw; }
+  #hint {
+    font-size: 12px;
+    white-space: normal;
+    max-width: 88vw;
+  }
 }

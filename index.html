@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Super Kid Saves the Planet</title>
   <meta name="description" content="A kid-friendly arcade game where you catch eco items, answer quiz questions and save the planet!" />
   <link rel="icon" href="assets/images/super_kid.png" />
@@ -10,11 +10,28 @@
 </head>
 <body>
   <div id="app">
-    <canvas id="game" width="1200" height="900" tabindex="0"></canvas>
-    <button id="pause-btn" class="pause" type="button" aria-label="Pause game" title="Pause (P)">⏸️</button>
-    <button id="mute-btn" class="mute" type="button" aria-label="Toggle sound" title="Toggle sound">🔊</button>
+    <div id="stage">
+      <canvas id="game" width="1200" height="900" tabindex="0"></canvas>
+      <div class="controls">
+        <button id="pause-btn" class="pause" type="button" aria-label="Pause game" title="Pause (P)">⏸️</button>
+        <button id="mute-btn" class="mute" type="button" aria-label="Toggle sound" title="Toggle sound">🔊</button>
+      </div>
+    </div>
     <p id="hint">Use <b>← →</b> or <b>A D</b> to move · on touch, hold left / right side</p>
   </div>
+
+  <script>
+    // Show touch-friendly instructions on phones/tablets.
+    (function () {
+      var hint = document.getElementById("hint");
+      var touch = ('ontouchstart' in window) ||
+                  (navigator.maxTouchPoints > 0) ||
+                  window.matchMedia('(pointer: coarse)').matches;
+      if (touch && hint) {
+        hint.innerHTML = 'Hold the <b>left</b> or <b>right</b> side of the screen to move';
+      }
+    })();
+  </script>
 
   <script src="js/quizzes.js"></script>
   <script src="js/game.js"></script>

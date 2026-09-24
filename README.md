@@ -20,6 +20,7 @@ Catch the good eco items, dodge the pollution, answer the quiz questions, and br
 - **More falling items** with a slightly faster drop speed for extra action.
 - **Original hand-drawn backgrounds** (polluted city vs. clean nature) kept from the original game.
 - **Touch & keyboard controls** so it works on phones, tablets, and desktops.
+- **Fully responsive layout** — the 4:3 play area scales to any screen and the controls stay anchored to the game.
 - **Mute toggle** (top-right 🔊 button).
 - **Pause / resume** (top-right ⏸ button or `P`).
 
