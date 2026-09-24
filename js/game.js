@@ -497,12 +497,16 @@ class Game {
     // Ambient background-motion particles (smoke / petals / sparks)
     this.ambient = [];
 
-    // Chimney positions that emit vivid brown smoke in the polluted scene.
+    // Chimney positions that emit brown smoke, spread across the whole scene.
     this.brownEmitters = [
-      { x: 560, y: 360 },
-      { x: 650, y: 330 },
-      { x: 730, y: 360 },
-      { x: 610, y: 430 },
+      { x: 130, y: 360 },
+      { x: 270, y: 330 },
+      { x: 400, y: 380 },
+      { x: 540, y: 340 },
+      { x: 680, y: 300 },
+      { x: 820, y: 360 },
+      { x: 950, y: 330 },
+      { x: 1070, y: 380 },
     ];
 
     // Best score (persisted in the browser)
@@ -1063,7 +1067,7 @@ class Game {
       if (Math.random() < 1.5 * dt) this._spawnSpark();
     } else {
       if (Math.random() < 2.5 * dt) this._spawnSmoke();
-      if (Math.random() < 3.0 * dt) this._spawnBrownSmoke();
+      if (Math.random() < 1.6 * dt) this._spawnBrownSmoke();
     }
 
     for (let i = this.ambient.length - 1; i >= 0; i--) {
@@ -1115,13 +1119,13 @@ class Game {
     const e = pick(this.brownEmitters);
     this.ambient.push({
       kind: "brown",
-      x: e.x + rand(-14, 14),
-      y: e.y + rand(-6, 6),
-      vx: rand(-8, 8),
-      vy: rand(-34, -20),
-      r: rand(16, 28),
-      grow: rand(5, 9),
-      baseAlpha: rand(0.22, 0.36),
+      x: e.x + rand(-18, 18),
+      y: e.y + rand(-8, 8),
+      vx: rand(-7, 7),
+      vy: rand(-30, -18),
+      r: rand(12, 20),
+      grow: rand(3, 6),
+      baseAlpha: rand(0.10, 0.18),
       phase: rand(0, Math.PI * 2),
       age: 0,
       maxLife: rand(5, 8),
@@ -1171,12 +1175,12 @@ class Game {
         ctx.fill();
       } else if (p.kind === "brown") {
         ctx.globalAlpha = clamp(p.alpha, 0, 1);
-        ctx.fillStyle = "#a0673d";
+        ctx.fillStyle = "#9a6a44";
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
         ctx.fill();
-        ctx.globalAlpha = clamp(p.alpha * 0.85, 0, 1);
-        ctx.fillStyle = "#d69a5a";
+        ctx.globalAlpha = clamp(p.alpha * 0.7, 0, 1);
+        ctx.fillStyle = "#c88a50";
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.r * 0.55, 0, Math.PI * 2);
         ctx.fill();
@@ -1370,6 +1374,12 @@ class Game {
       LOGICAL_W,
       LOGICAL_H
     );
+
+    // Soften the clean scene so it reads lighter and less saturated.
+    if (this.cleanMode) {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.20)";
+      ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+    }
 
     // Subtle animated layer on top of the original background
     this._drawAmbient();
