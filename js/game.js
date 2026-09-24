@@ -23,7 +23,7 @@ const STATE = {
 
 const GAME_DURATION = 5 * 60;            // 5 minute mission
 const QUIZ_INTERVAL = 5;                 // quiz after every N catches
-const CLEAN_ECO_THRESHOLD = 6;           // eco actions needed to clean the planet
+const CLEAN_HEALTH_THRESHOLD = 50;       // planet health that unlocks the clean environment
 const FREEZE_SECONDS = 3;                // ice-cube freeze duration
 const STARTING_HEALTH = 10;
 const STARTING_LIVES = 8;
@@ -378,6 +378,11 @@ class Game {
     this.winParticles = [];
     this.winStartTime = 0;
     this.winElapsed = 0;
+    this.bgCache = {};          // cached procedural backgrounds (polluted / clean)
+    this.smoke = [];            // smoke particles for the polluted scene
+    this.leaves = [];           // drifting leaves/petals for the clean scene
+    this.clouds = [];           // drifting clouds for the clean scene
+    this._smokeStacks = [];     // factory chimney tops that emit smoke
 
     // Intro subtitle state
     this.introLineIndex = 0;
@@ -391,6 +396,8 @@ class Game {
   async init() {
     await loadAssets();
     this._resetPlayerPosition();
+    this._initBackgrounds();
+    this._initClouds();
     this._startLoop();
   }
 
@@ -550,6 +557,8 @@ class Game {
     this.frozen = false;
     this.freezeRemaining = 0;
     this.freezeParticles = [];
+    this.smoke = [];
+    this.leaves = [];
     this._resetPlayerPosition();
     this.audio.playMusic("polluted");
   }
@@ -700,6 +709,8 @@ class Game {
   }
 
   _update(dt) {
+    this._updateAmbient(dt);
+
     if (this.state === STATE.INTRO) {
       this._updateIntro(dt);
       return;
@@ -779,10 +790,10 @@ class Game {
   }
 
   _updateItems(dt) {
-    const spawnPerSec = 1.2;
+    const spawnPerSec = 3.0;
     if (Math.random() < spawnPerSec * dt) this._spawnItem();
 
-    const fallSpeed = this.cleanMode ? 720 : 660;
+    const fallSpeed = this.cleanMode ? 850 : 780;
     const caught = [];
     const playerRect = this._kidRect(0.28);
 
@@ -834,7 +845,7 @@ class Game {
   }
 
   _checkCleanMode() {
-    if (!this.cleanMode && this.ecoActions >= CLEAN_ECO_THRESHOLD) {
+    if (!this.cleanMode && this.health >= CLEAN_HEALTH_THRESHOLD) {
       this.cleanMode = true;
       this.cleanMsgTimer = 3;
       this.audio.playMusic("clean");
@@ -920,6 +931,343 @@ class Game {
     this.ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
   }
 
+  /* --------------------- Modern procedural backgrounds ------------------ */
+
+  _initBackgrounds() {
+    this.bgCache.polluted = this._makeBackground("polluted");
+    this.bgCache.clean = this._makeBackground("clean");
+  }
+
+  _makeBackground(mode) {
+    const c = document.createElement("canvas");
+    c.width = LOGICAL_W;
+    c.height = LOGICAL_H;
+    const ctx = c.getContext("2d");
+    if (mode === "polluted") this._drawPollutedBackground(ctx);
+    else this._drawCleanBackground(ctx);
+    return c;
+  }
+
+  _drawBackground(mode) {
+    const ctx = this.ctx;
+    if (!this.bgCache[mode]) this.bgCache[mode] = this._makeBackground(mode);
+    ctx.drawImage(this.bgCache[mode], 0, 0);
+
+    if (mode === "clean") {
+      this._drawClouds(ctx);
+      this._drawLeaves(ctx);
+    } else {
+      this._drawSmoke(ctx);
+    }
+  }
+
+  _drawPollutedBackground(ctx) {
+    const w = LOGICAL_W, h = LOGICAL_H;
+
+    // Hazy dusk sky
+    const sky = ctx.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, "#232838");
+    sky.addColorStop(0.42, "#3a4054");
+    sky.addColorStop(0.70, "#6d5a4c");
+    sky.addColorStop(1, "#8a6a50");
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    // Low smoggy sun
+    const sunX = w * 0.68, sunY = h * 0.56;
+    const glow = ctx.createRadialGradient(sunX, sunY, 8, sunX, sunY, 230);
+    glow.addColorStop(0, "rgba(255,190,120,0.50)");
+    glow.addColorStop(1, "rgba(255,190,120,0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(sunX - 230, sunY - 230, 460, 460);
+    ctx.fillStyle = "rgba(255,205,135,0.35)";
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, 40, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Two skyline layers for depth
+    this._drawSkyline(ctx, h * 0.74, "#45485a", false);
+    this._drawSkyline(ctx, h * 0.88, "#2b2e3a", true);
+
+    // Factories with chimneys (smoke is emitted from these in _updateAmbient)
+    this._smokeStacks = [];
+    const factoryXs = [170, 470, 810, 1020];
+    const groundY = h * 0.88;
+    for (const fx of factoryXs) {
+      const fw = 130, fh = 96;
+      const fy = groundY - fh + 8;
+      ctx.fillStyle = "#20242c";
+      ctx.fillRect(fx, fy, fw, fh);
+      // sawtooth roof
+      ctx.beginPath();
+      for (let sx = fx; sx < fx + fw; sx += 20) {
+        ctx.moveTo(sx, fy);
+        ctx.lineTo(sx + 10, fy - 14);
+        ctx.lineTo(sx + 20, fy);
+      }
+      ctx.fill();
+      // chimneys
+      const stackH = 44 + randInt(0, 30);
+      ctx.fillStyle = "#191c23";
+      ctx.fillRect(fx + 22, fy - stackH, 16, stackH);
+      ctx.fillRect(fx + fw - 38, fy - stackH, 16, stackH);
+      this._smokeStacks.push({ x: fx + 30, y: fy - stackH });
+      this._smokeStacks.push({ x: fx + fw - 30, y: fy - stackH });
+    }
+
+    // Ground
+    const ground = ctx.createLinearGradient(0, groundY, 0, h);
+    ground.addColorStop(0, "#262b31");
+    ground.addColorStop(1, "#15181d");
+    ctx.fillStyle = ground;
+    ctx.fillRect(0, groundY, w, h - groundY);
+    ctx.fillStyle = "rgba(0,0,0,0.30)";
+    ctx.fillRect(0, groundY, w, 3);
+    // subtle cracked lines
+    ctx.strokeStyle = "rgba(255,255,255,0.05)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 6; i++) {
+      const lx = 40 + i * 190;
+      ctx.beginPath();
+      ctx.moveTo(lx, groundY + 18);
+      ctx.lineTo(lx + 40, groundY + 55);
+      ctx.stroke();
+    }
+  }
+
+  _drawSkyline(ctx, baseY, color, lit) {
+    const w = LOGICAL_W;
+    let x = -20;
+    ctx.fillStyle = color;
+    while (x < w + 40) {
+      const bw = 48 + Math.floor(rand(30, 120));
+      const bh = 90 + Math.floor(rand(60, 220));
+      const by = baseY - bh;
+      ctx.fillRect(x, by, bw, bh);
+      ctx.fillStyle = "rgba(0,0,0,0.18)";
+      ctx.fillRect(x, by, bw, 6);
+      ctx.fillStyle = color;
+      if (lit) {
+        ctx.fillStyle = "rgba(255,205,120,0.85)";
+        for (let wy = by + 16; wy < baseY - 14; wy += 24) {
+          for (let wx = x + 9; wx < x + bw - 14; wx += 19) {
+            if (Math.random() < 0.30) ctx.fillRect(wx, wy, 8, 11);
+          }
+        }
+        ctx.fillStyle = color;
+      }
+      x += bw + 8 + Math.floor(Math.random() * 12);
+    }
+  }
+
+  _drawCleanBackground(ctx) {
+    const w = LOGICAL_W, h = LOGICAL_H;
+
+    // Bright cheerful sky
+    const sky = ctx.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, "#3fa9f5");
+    sky.addColorStop(0.55, "#8fd3f7");
+    sky.addColorStop(1, "#e2f7fd");
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    // Sun with soft glow
+    const sunX = w * 0.80, sunY = h * 0.15;
+    const glow = ctx.createRadialGradient(sunX, sunY, 8, sunX, sunY, 200);
+    glow.addColorStop(0, "rgba(255,244,170,0.9)");
+    glow.addColorStop(1, "rgba(255,244,170,0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(sunX - 200, sunY - 200, 400, 400);
+    ctx.fillStyle = "#fff3a6";
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, 46, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Faint rainbow
+    this._drawRainbow(ctx, w * 0.5, h * 0.96, 370);
+
+    // Layered rolling hills
+    this._drawHills(ctx, h * 0.68, 130, "#8fd88b");
+    this._drawHills(ctx, h * 0.80, 160, "#55b56c");
+
+    // Grass / ground
+    const grass = ctx.createLinearGradient(0, h * 0.80, 0, h);
+    grass.addColorStop(0, "#4cae63");
+    grass.addColorStop(1, "#2f8a4a");
+    ctx.fillStyle = grass;
+    ctx.fillRect(0, h * 0.80, w, h * 0.20);
+
+    // Little flowers and grass tufts
+    for (let i = 0; i < 26; i++) {
+      const fx = rand(0, w);
+      const fy = h * 0.82 + rand(0, h * 0.14);
+      ctx.fillStyle = pick(["#ffd66b", "#ff8fa3", "#ffffff", "#ff9ecb"]);
+      ctx.beginPath();
+      ctx.arc(fx, fy, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.beginPath();
+      ctx.arc(fx, fy, 1.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 18; i++) {
+      const gx = rand(0, w);
+      const gy = h * 0.81 + rand(0, h * 0.16);
+      ctx.beginPath();
+      ctx.moveTo(gx, gy);
+      ctx.lineTo(gx - 2, gy - 8);
+      ctx.moveTo(gx, gy);
+      ctx.lineTo(gx + 3, gy - 9);
+      ctx.stroke();
+    }
+  }
+
+  _drawHills(ctx, baseY, height, color) {
+    const w = LOGICAL_W, h = LOGICAL_H;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(-10, baseY + 2);
+    ctx.quadraticCurveTo(w * 0.22, baseY - height, w * 0.50, baseY - height * 0.45);
+    ctx.quadraticCurveTo(w * 0.78, baseY - height * 0.95, w + 10, baseY - height * 0.25);
+    ctx.lineTo(w + 10, h);
+    ctx.lineTo(-10, h);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  _drawRainbow(ctx, cx, cy, radius) {
+    const bands = ["#ff6b6b", "#ffb347", "#ffe66b", "#7be07b", "#6bc8ff", "#b48aff"];
+    ctx.save();
+    ctx.globalAlpha = 0.32;
+    ctx.lineWidth = 15;
+    for (let i = 0; i < bands.length; i++) {
+      ctx.strokeStyle = bands[i];
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius - i * 15, Math.PI, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /* --------------------- Ambient animation helpers ---------------------- */
+
+  _initClouds() {
+    this.clouds = [];
+    for (let i = 0; i < 5; i++) {
+      this.clouds.push({
+        x: rand(0, LOGICAL_W),
+        y: rand(60, 300),
+        scale: rand(0.6, 1.5),
+        speed: rand(10, 26),
+        blobs: this._makeCloudBlobs(),
+      });
+    }
+  }
+
+  _makeCloudBlobs() {
+    const n = 4 + Math.floor(Math.random() * 3);
+    const blobs = [];
+    for (let i = 0; i < n; i++) {
+      blobs.push({ dx: (i - n / 2) * 36, dy: Math.sin(i * 1.3) * 11, r: 26 + Math.random() * 18 });
+    }
+    return blobs;
+  }
+
+  _drawClouds(ctx) {
+    for (const cl of this.clouds) {
+      ctx.save();
+      ctx.globalAlpha = 0.92;
+      ctx.fillStyle = "#ffffff";
+      for (const b of cl.blobs) {
+        ctx.beginPath();
+        ctx.arc(cl.x + b.dx * cl.scale, cl.y + b.dy * cl.scale, b.r * cl.scale, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  _drawSmoke(ctx) {
+    for (const p of this.smoke) {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, p.alpha);
+      ctx.fillStyle = "#cfc8ce";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  _drawLeaves(ctx) {
+    for (const p of this.leaves) {
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate((p.rot * Math.PI) / 180);
+      ctx.globalAlpha = clamp(1 - p.age / p.life, 0, 1);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, p.size, p.size * 0.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  _updateAmbient(dt) {
+    // Drift the clouds in the clean scene.
+    for (const cl of this.clouds) {
+      cl.x += cl.speed * dt;
+      if (cl.x > LOGICAL_W + 180) cl.x = -180;
+    }
+
+    // Only simulate scene particles while a scene is on screen.
+    if (this.state !== STATE.PLAYING && this.state !== STATE.GAMEOVER) return;
+
+    if (this.cleanMode) {
+      if (Math.random() < 4 * dt) this._spawnLeaf();
+      for (let i = this.leaves.length - 1; i >= 0; i--) {
+        const p = this.leaves[i];
+        p.age += dt;
+        p.y += p.vy * dt;
+        p.x += p.vx * dt + Math.sin((p.age + p.phase) * 2) * 22 * dt;
+        p.rot += p.spin * dt;
+        if (p.y > LOGICAL_H + 24 || p.age >= p.life) this.leaves.splice(i, 1);
+      }
+    } else {
+      if (this._smokeStacks.length && Math.random() < 5 * dt) {
+        const st = pick(this._smokeStacks);
+        this.smoke.push({
+          x: st.x + rand(-4, 4), y: st.y,
+          vx: rand(-7, 7), vy: rand(-36, -24),
+          r: rand(8, 16), alpha: 0.32, age: 0, life: rand(3, 5),
+        });
+      }
+      for (let i = this.smoke.length - 1; i >= 0; i--) {
+        const p = this.smoke[i];
+        p.age += dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy -= 3 * dt;
+        p.r += 7 * dt;
+        p.alpha = 0.32 * (1 - p.age / p.life);
+        if (p.age >= p.life) this.smoke.splice(i, 1);
+      }
+    }
+  }
+
+  _spawnLeaf() {
+    const colors = ["#ffd66b", "#ff8fa3", "#b9f27a", "#9ad8ff", "#ffb3c6"];
+    this.leaves.push({
+      x: rand(0, LOGICAL_W), y: -20,
+      vx: rand(-12, 12), vy: rand(46, 86),
+      size: rand(4, 8), color: pick(colors),
+      rot: rand(0, 360), spin: rand(-90, 90),
+      phase: rand(0, Math.PI * 2), age: 0, life: rand(6, 10),
+    });
+  }
+
   _drawIntro() {
     const ctx = this.ctx;
     const t = performance.now() / 1000;
@@ -991,12 +1339,8 @@ class Game {
   _drawPlaying() {
     const ctx = this.ctx;
 
-    // Background
-    this._drawImageCover(
-      this.cleanMode ? ASSETS.images.cleanBg : ASSETS.images.pollutedBg,
-      LOGICAL_W,
-      LOGICAL_H
-    );
+    // Background (procedural, modern and animated)
+    this._drawBackground(this.cleanMode);
 
     // Items
     for (const item of this.items) {
@@ -1129,9 +1473,8 @@ class Game {
 
   _drawHud() {
     const ctx = this.ctx;
-    const pad = 14;
 
-    // Health card + bar
+    // Planet health card + bar
     const healthColor = this.health >= 70 ? "#3cdc5a" : this.health >= 35 ? "#ffc83c" : "#ff5050";
     this._hudCard("PLANET HEALTH  " + this.health + "%", 18, 18, "#14783c");
     const barW = 220;
@@ -1150,14 +1493,8 @@ class Game {
       ctx.fill();
     }
 
-    // Eco progress toward a clean planet
-    this._hudCard("CLEAN ENERGY  " + this.ecoActions + "/" + CLEAN_ECO_THRESHOLD, 18, 94, "#7a5a1e");
-
     // Lives
-    this._hudCard("LIVES  " + this.lives, 18, 150, "#285ab4");
-
-    // Score
-    this._hudCard("SCORE  " + this.score, 18, 206, "#a05a1e");
+    this._hudCard("LIVES  " + this.lives, 18, 94, "#285ab4");
 
     // Timer (top centre)
     const remaining = Math.max(0, GAME_DURATION - this.elapsed);

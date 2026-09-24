@@ -12,8 +12,10 @@ Catch the good eco items, dodge the pollution, answer the quiz questions, and br
 - **Avoid bad items** (smoke, trash, plastic…) — they hurt the planet and cost a life.
 - **🧊 NEW — Ice cubes:** catching an ice cube **freezes Super Kid for 3 seconds** before you can move again.
 - **Eco quizzes:** every 5 catches opens a quick quiz. Answer correctly for a big +6 health bonus.
-- **Clean Environment mode:** after 6 eco actions, the world transforms from polluted to clean (background + music change).
+- **Clean Environment mode:** when planet health reaches **50%**, the world transforms from polluted to clean (background + music change).
 - **Win / Game Over screens** with confetti, score, and instant replay.
+- **More falling items** with a slightly faster drop speed for extra action.
+- **Polished, animated backgrounds** (hazy city vs. sunny hills) designed for kids 8–12.
 - **Touch & keyboard controls** so it works on phones, tablets, and desktops.
 - **Mute toggle** (top-right 🔊 button).
 
@@ -73,8 +75,9 @@ SuperKidSavesThePlanet/
 The code is organised so new mechanics are easy to add:
 
 - **Gameplay tuning** — constants live at the top of `js/game.js`:
-  `GAME_DURATION`, `QUIZ_INTERVAL`, `CLEAN_ECO_THRESHOLD`, `FREEZE_SECONDS`,
+  `GAME_DURATION`, `QUIZ_INTERVAL`, `CLEAN_HEALTH_THRESHOLD`, `FREEZE_SECONDS`,
   `STARTING_HEALTH`, `STARTING_LIVES`, `ICE_PROBABILITY`.
+  Item spawn rate and fall speed are tuned in `_updateItems()`.
 - **New falling item types** — extend `_spawnItem()` and `_handleCatch()` in `js/game.js`
   (and optionally add a sprite in `assets/images/`).
 - **New quiz questions** — edit `js/quizzes.js`.
