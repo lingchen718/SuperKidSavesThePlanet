@@ -42,6 +42,14 @@ const SPEEDUP_PER_MINUTE = 0.10;         // +10% fall speed every minute
 const SPAWN_RAMP_PER_MINUTE = 0.15;      // +0.15 items/sec every minute
 
 const BEST_SCORE_KEY = "superKidBestScore";
+const COMBO_STEP = 5;                     // good catches per combo level
+const COMBO_MAX = 4;                      // max combo multiplier
+
+const REBUILD_MILESTONES = [
+  { at: 25, kind: "tree",     msg: "A tree has sprouted!" },
+  { at: 50, kind: "flowers",  msg: "" },
+  { at: 75, kind: "windmill", msg: "A windmill is turning!" },
+];
 
 /* ------------------------------ Utilities ------------------------------ */
 
@@ -447,6 +455,50 @@ class AudioManager {
     osc.start(t);
     osc.stop(t + 0.35);
   }
+
+  /* A quick rising chime when a combo levels up. */
+  playCombo() {
+    if (!this.unlocked || this.muted) return;
+    this.resumeCtx();
+    if (!this.ac) return;
+    const t = this.ac.currentTime;
+    const gain = this.ac.createGain();
+    gain.connect(this.ac.destination);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.18, t + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+
+    [660, 880].forEach((freq, i) => {
+      const osc = this.ac.createOscillator();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, t + i * 0.08);
+      osc.connect(gain);
+      osc.start(t + i * 0.08);
+      osc.stop(t + 0.55);
+    });
+  }
+
+  /* A soft magical sparkle for world-rebuild milestones. */
+  playBuild() {
+    if (!this.unlocked || this.muted) return;
+    this.resumeCtx();
+    if (!this.ac) return;
+    const t = this.ac.currentTime;
+    const gain = this.ac.createGain();
+    gain.connect(this.ac.destination);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.16, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+
+    [523, 659, 784, 1047].forEach((freq, i) => {
+      const osc = this.ac.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, t + i * 0.06);
+      osc.connect(gain);
+      osc.start(t + i * 0.06);
+      osc.stop(t + 0.95);
+    });
+  }
 }
 
 /* ------------------------------ Game ----------------------------------- */
@@ -508,6 +560,19 @@ class Game {
       { x: 950, y: 330 },
       { x: 1070, y: 380 },
     ];
+
+    // World-rebuild progress
+    this.rebuildLevel = 0;
+    this.decorations = [];
+    this.rebuildMsg = "";
+    this.rebuildMsgTimer = 0;
+    this.bursts = [];
+
+    // Combo
+    this.combo = 0;
+    this.comboMult = 1;
+    this.comboPopup = "";
+    this.comboPopupTimer = 0;
 
     // Best score (persisted in the browser)
     this.bestScore = 0;
@@ -731,6 +796,15 @@ class Game {
     this.newBest = false;
     this.paused = false;
     this.ambient = [];
+    this.rebuildLevel = 0;
+    this.decorations = [];
+    this.rebuildMsg = "";
+    this.rebuildMsgTimer = 0;
+    this.bursts = [];
+    this.combo = 0;
+    this.comboMult = 1;
+    this.comboPopup = "";
+    this.comboPopupTimer = 0;
     this._syncPauseButton();
     this._resetPlayerPosition();
     this.audio.playMusic("polluted");
@@ -855,8 +929,17 @@ class Game {
     this.itemsCaught += 1;
 
     if (item.type === "good") {
-      this.score += 1;
-      this.health = clamp(this.health + 1, 0, 100);
+      this.combo += 1;
+      const newMult = Math.min(COMBO_MAX, 1 + Math.floor(this.combo / COMBO_STEP));
+      if (newMult > this.comboMult) {
+        this.comboMult = newMult;
+        this.comboPopup = "COMBO x" + newMult + "!";
+        this.comboPopupTimer = 1.6;
+        this.audio.playCombo();
+      }
+      const healthGain = this.comboMult >= 3 ? 2 : 1;
+      this.score += this.comboMult;
+      this.health = clamp(this.health + healthGain, 0, 100);
       this.ecoActions += 1;
       this.kid.flashType = 1;
       this.kid.flashTimer = 18;
@@ -870,6 +953,8 @@ class Game {
         this.kid.flashTimer = 12;
         this.audio.playShieldBlock();
       } else {
+        this.combo = 0;
+        this.comboMult = 1;
         this.score = Math.max(0, this.score - 1);
         this.health = clamp(this.health - 3, 0, 100);
         this.lives -= 1;
@@ -913,6 +998,7 @@ class Game {
     // Keep the background alive on the play + game-over screens.
     if (this.state === STATE.PLAYING || this.state === STATE.GAMEOVER) {
       this._updateAmbient(dt);
+      this._updateBursts(dt);
     }
 
     if (this.state === STATE.INTRO) {
@@ -955,6 +1041,9 @@ class Game {
       this._checkCleanMode();
     }
 
+    this._checkRebuild();
+    if (this.rebuildMsgTimer > 0) this.rebuildMsgTimer -= dt;
+    if (this.comboPopupTimer > 0) this.comboPopupTimer -= dt;
     if (this.cleanMsgTimer > 0) this.cleanMsgTimer -= dt;
   }
 
@@ -1063,11 +1152,15 @@ class Game {
 
   _updateAmbient(dt) {
     if (this.cleanMode) {
-      if (Math.random() < 2.5 * dt) this._spawnPetal();
-      if (Math.random() < 1.5 * dt) this._spawnSpark();
+      // More life as the planet gets healthier (50 -> 100).
+      const life = 1 + 0.8 * clamp((this.health - CLEAN_HEALTH_THRESHOLD) / 50, 0, 1);
+      if (Math.random() < 2.5 * life * dt) this._spawnPetal();
+      if (Math.random() < 1.5 * life * dt) this._spawnSpark();
     } else {
-      if (Math.random() < 2.5 * dt) this._spawnSmoke();
-      if (Math.random() < 1.6 * dt) this._spawnBrownSmoke();
+      // Smoke thins out as the planet cleans up (0 -> 50).
+      const smog = 1 - 0.75 * clamp(this.health / CLEAN_HEALTH_THRESHOLD, 0, 1);
+      if (Math.random() < 2.5 * smog * dt) this._spawnSmoke();
+      if (Math.random() < 1.6 * smog * dt) this._spawnBrownSmoke();
     }
 
     for (let i = this.ambient.length - 1; i >= 0; i--) {
@@ -1388,6 +1481,10 @@ class Game {
     // Subtle animated layer on top of the original background
     this._drawAmbient();
 
+    // Rebuilt scenery + milestone confetti
+    this._drawDecorations();
+    this._drawBursts();
+
     // Items (with colour-coded effects so players can read them at a glance)
     for (const item of this.items) {
       this._drawItemEffects(item);
@@ -1405,6 +1502,10 @@ class Game {
 
     // HUD
     this._drawHud();
+
+    // Combo indicator + rebuild milestone banner
+    this._drawCombo();
+    if (this.rebuildMsgTimer > 0) this._drawRebuildMessage();
 
     // Clean-mode unlock message
     if (this.cleanMsgTimer > 0) this._drawCleanMessage();
@@ -1485,6 +1586,216 @@ class Game {
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  /* ---------------- World-rebuild progress & combo helpers ---------------- */
+
+  _checkRebuild() {
+    const level = REBUILD_MILESTONES.filter((m) => this.health >= m.at).length;
+    while (this.rebuildLevel < level) {
+      this._triggerRebuild(this.rebuildLevel);
+    }
+  }
+
+  _triggerRebuild(i) {
+    const m = REBUILD_MILESTONES[i];
+    this.rebuildLevel = i + 1;
+    const x = this._rebuildX(m.kind);
+    this.decorations.push({ kind: m.kind, x, born: performance.now() });
+    if (m.msg) {
+      this.rebuildMsg = m.msg;
+      this.rebuildMsgTimer = 2.5;
+    }
+    this.audio.playBuild();
+    this._spawnBuildBurst(x, LOGICAL_H - 70);
+  }
+
+  _rebuildX(kind) {
+    const spots = { tree: 150, flowers: 900, windmill: 450 };
+    return (spots[kind] || 500) + rand(-24, 24);
+  }
+
+  _spawnBuildBurst(x, y) {
+    const colors = ["#64ff78", "#b4ff64", "#ffd66b", "#50c8ff", "#ffb3c6"];
+    for (let i = 0; i < 26; i++) {
+      this.bursts.push({
+        x, y,
+        vx: rand(-170, 170),
+        vy: rand(-280, -60),
+        size: rand(4, 9),
+        color: pick(colors),
+        rot: rand(0, Math.PI * 2),
+        spin: rand(-7, 7),
+        shape: Math.random() < 0.5 ? "circle" : "rect",
+        age: 0,
+        life: rand(0.8, 1.4),
+      });
+    }
+  }
+
+  _updateBursts(dt) {
+    for (let i = this.bursts.length - 1; i >= 0; i--) {
+      const p = this.bursts[i];
+      p.age += dt;
+      p.vy += 620 * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.rot += p.spin * dt;
+      if (p.age >= p.life) this.bursts.splice(i, 1);
+    }
+  }
+
+  _drawBursts() {
+    const ctx = this.ctx;
+    for (const p of this.bursts) {
+      ctx.save();
+      ctx.globalAlpha = clamp(1 - p.age / p.life, 0, 1);
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      if (p.shape === "rect") {
+        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+      } else {
+        ctx.beginPath();
+        ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  /* Pop-in scale with a bouncy ease for rebuilt scenery. */
+  _popScale(t) {
+    if (t <= 0) return 0;
+    if (t >= 1) return 1;
+    const c1 = 1.70158, c3 = c1 + 1;
+    return clamp(1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2), 0, 1.2);
+  }
+
+  _drawDecorations() {
+    const ctx = this.ctx;
+    const y = LOGICAL_H - 26;
+    const t = performance.now() / 1000;
+    for (const d of this.decorations) {
+      const s = this._popScale((performance.now() - d.born) / 400);
+      if (d.kind === "tree") this._drawTree(ctx, d.x, y, s);
+      else if (d.kind === "flowers") this._drawFlowers(ctx, d.x, y, s);
+      else if (d.kind === "windmill") this._drawWindmill(ctx, d.x, y, s, t);
+    }
+  }
+
+  _drawTree(ctx, x, y, s) {
+    ctx.fillStyle = "#6b4a2f";
+    ctx.fillRect(x - 6 * s, y - 46 * s, 12 * s, 46 * s);
+    ctx.fillStyle = "#4caf50";
+    ctx.beginPath(); ctx.arc(x, y - 60 * s, 22 * s, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#66bb6a";
+    ctx.beginPath(); ctx.arc(x - 16 * s, y - 44 * s, 15 * s, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + 16 * s, y - 44 * s, 15 * s, 0, Math.PI * 2); ctx.fill();
+  }
+
+  _drawFlowers(ctx, x, y, s) {
+    const colors = ["#ff8fa3", "#ffd66b", "#ffffff", "#ff9ecb", "#b9f27a"];
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 5; i++) {
+      const fx = x + (i - 2) * 20 * s;
+      const fy = y - (7 + (i % 3) * 5) * s;
+      ctx.strokeStyle = "#3d8b40";
+      ctx.beginPath(); ctx.moveTo(fx, y); ctx.lineTo(fx, fy); ctx.stroke();
+      ctx.fillStyle = colors[i % colors.length];
+      ctx.beginPath(); ctx.arc(fx, fy, 5 * s, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  _drawWindmill(ctx, x, y, s, t) {
+    // tower
+    ctx.fillStyle = "#e8dcc0";
+    ctx.beginPath();
+    ctx.moveTo(x - 14 * s, y);
+    ctx.lineTo(x - 8 * s, y - 70 * s);
+    ctx.lineTo(x + 8 * s, y - 70 * s);
+    ctx.lineTo(x + 14 * s, y);
+    ctx.closePath();
+    ctx.fill();
+    // roof
+    ctx.fillStyle = "#c0392b";
+    ctx.beginPath();
+    ctx.moveTo(x - 10 * s, y - 70 * s);
+    ctx.lineTo(x, y - 88 * s);
+    ctx.lineTo(x + 10 * s, y - 70 * s);
+    ctx.closePath();
+    ctx.fill();
+    // rotating blades
+    ctx.save();
+    ctx.translate(x, y - 78 * s);
+    ctx.rotate(t * 2.2);
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 3 * s;
+    ctx.lineCap = "round";
+    for (let k = 0; k < 3; k++) {
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, -30 * s);
+      ctx.stroke();
+      ctx.rotate((Math.PI * 2) / 3);
+    }
+    ctx.restore();
+  }
+
+  _drawRebuildMessage() {
+    if (this.rebuildMsgTimer <= 0) return;
+    const ctx = this.ctx;
+    const alpha = clamp(this.rebuildMsgTimer / 0.4, 0, 1);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.textAlign = "center";
+    ctx.font = "700 30px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    const msg = this.rebuildMsg;
+    const tw = ctx.measureText(msg).width;
+    const y = 148;
+    ctx.fillStyle = "rgba(20, 90, 30, 0.85)";
+    roundedRect(ctx, LOGICAL_W / 2 - tw / 2 - 22, y - 30, tw + 44, 52, 14);
+    ctx.fill();
+    ctx.strokeStyle = "#b4ff64";
+    ctx.lineWidth = 2.5;
+    roundedRect(ctx, LOGICAL_W / 2 - tw / 2 - 22, y - 30, tw + 44, 52, 14);
+    ctx.stroke();
+    ctx.fillStyle = "#d9ffd9";
+    ctx.fillText(msg, LOGICAL_W / 2, y + 4);
+    ctx.restore();
+  }
+
+  _drawCombo() {
+    const ctx = this.ctx;
+
+    // Streak pill under the timer
+    if (this.comboMult >= 2 && this.state === STATE.PLAYING) {
+      const label = "COMBO x" + this.comboMult + " · " + this.combo;
+      ctx.textAlign = "center";
+      ctx.font = "700 22px 'Comic Neue', 'Comic Sans MS', sans-serif";
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+      roundedRect(ctx, LOGICAL_W / 2 - tw / 2 - 16, 60, tw + 32, 32, 12);
+      ctx.fill();
+      ctx.fillStyle = "#ffd66b";
+      ctx.fillText(label, LOGICAL_W / 2, 83);
+    }
+
+    // Level-up popup
+    if (this.comboPopupTimer > 0) {
+      const alpha = clamp(this.comboPopupTimer / 0.4, 0, 1);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.textAlign = "center";
+      ctx.font = "700 46px 'Comic Neue', 'Comic Sans MS', sans-serif";
+      const msg = this.comboPopup;
+      const y = 220;
+      ctx.fillStyle = "#0a0e19";
+      ctx.fillText(msg, LOGICAL_W / 2 + 2, y + 2);
+      ctx.fillStyle = "#ffd66b";
+      ctx.fillText(msg, LOGICAL_W / 2, y);
+      ctx.restore();
+    }
   }
 
   _drawKid() {
