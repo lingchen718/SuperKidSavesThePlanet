@@ -65,12 +65,14 @@ const BEE_START = 50;              // first bee at 50% health
 const BEE_STEP = 5;                // one more every +5% health
 const BEE_MAX = 10;                // max flying creatures
 
-// Score-stage player aura (shiny glow levels, golden at the top)
-const AURA_STAGES = [
-  { at: 0,   color: null },
-  { at: 20,  color: "110,230,160" },   // shiny green
-  { at: 50,  color: "110,190,255" },   // shiny blue
-  { at: 100, color: "255,210,80" },    // golden
+// Unlockable aura "skins" — the Super Kid image stays clear, only the glow changes.
+const SKIN_KEY = "superKidSkin";
+const SKINS = [
+  { id: "none",   name: "No Aura",    cost: 0,   aura: null },
+  { id: "green",  name: "Green Glow", cost: 30,  aura: "110,230,160" },
+  { id: "blue",   name: "Blue Glow",  cost: 60,  aura: "110,190,255" },
+  { id: "purple", name: "Purple Glow", cost: 100, aura: "190,140,255" },
+  { id: "gold",   name: "Gold Glow",  cost: 150, aura: "255,210,80", shiny: true },
 ];
 
 /* ------------------------------ Utilities ------------------------------ */
@@ -616,8 +618,13 @@ class Game {
     this.creatures = [];        // bees + butterflies (clean)
     this.bursts = [];           // poof / confetti particles
 
-    // Score-stage aura
-    this.auraStage = 0;
+    // Aura skin (cosmetic, unlockable by best score)
+    this.selectedSkinId = "none";
+    try { this.selectedSkinId = localStorage.getItem(SKIN_KEY) || "none"; } catch (e) {}
+    this.skinMenuOpen = false;
+    this.skinsButtonRect = null;
+    this.skinSlotRects = [];
+    this.skinsBackRect = null;
 
     // Best score (persisted in the browser)
     this.bestScore = 0;
@@ -713,6 +720,14 @@ class Game {
     const p = this._toLogical(e);
 
     if (this.state === STATE.INTRO) {
+      if (this.skinMenuOpen) {
+        this._handleSkinMenuTap(p);
+        return;
+      }
+      if (this.skinsButtonRect && this._hit(p, this.skinsButtonRect)) {
+        this.skinMenuOpen = true;
+        return;
+      }
       this._startGame();
       return;
     }
@@ -775,6 +790,10 @@ class Game {
     }
 
     if (this.state === STATE.INTRO) {
+      if (this.skinMenuOpen) {
+        if (k === "Escape" || k === "Backspace") this.skinMenuOpen = false;
+        return;
+      }
       if (k === "Enter" || k === " ") this._startGame();
       return;
     }
@@ -848,7 +867,6 @@ class Game {
     this.monsters = [];
     this.creatures = [];
     this.bursts = [];
-    this.auraStage = 0;
     this._spawnMonsters();
     this._syncPauseButton();
     this._resetPlayerPosition();
@@ -1089,7 +1107,6 @@ class Game {
 
     this._checkMonsters();
     this._checkCreatures();
-    this._checkAura();
     if (this.comboPopupTimer > 0) this.comboPopupTimer -= dt;
     if (this.cleanMsgTimer > 0) this.cleanMsgTimer -= dt;
   }
@@ -1419,6 +1436,7 @@ class Game {
     switch (this.state) {
       case STATE.INTRO:
         this._drawIntro();
+        if (this.skinMenuOpen) this._drawSkinMenu();
         break;
       case STATE.PLAYING:  this._drawPlaying(); break;
       case STATE.WON:      this._drawWin(); break;
@@ -1506,6 +1524,19 @@ class Game {
     ctx.fillStyle = `rgba(${Math.round(160 * pulse + 60)}, ${Math.round(200 * pulse + 40)}, ${Math.round(230 * pulse + 25)}, 1)`;
     ctx.fillText(msg, LOGICAL_W / 2, LOGICAL_H * 0.9);
 
+    // Skins button (bottom-left corner)
+    const sbw = 160, sbh = 50, sbx = 34, sby = LOGICAL_H - 72;
+    this.skinsButtonRect = { x: sbx, y: sby, w: sbw, h: sbh };
+    ctx.fillStyle = "rgba(20, 30, 55, 0.82)";
+    roundedRect(ctx, sbx, sby, sbw, sbh, 12);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.5)";
+    ctx.lineWidth = 2;
+    roundedRect(ctx, sbx, sby, sbw, sbh, 12);
+    ctx.stroke();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "700 24px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillText("✨ Aura", sbx + sbw / 2, sby + 33);
   }
 
   _drawPlaying() {
@@ -1824,12 +1855,12 @@ class Game {
     }
   }
 
-  /* A glowing halo around the player that levels up with the score. */
+  /* A glowing halo around the player, based on the equipped aura skin. */
   _drawPlayerAura() {
-    const stage = this._auraStage();
-    if (stage <= 0) return;
-    const color = AURA_STAGES[stage].color;
-    const golden = stage >= AURA_STAGES.length - 1;
+    const skin = SKINS.find((sk) => sk.id === this.selectedSkinId) || SKINS[0];
+    if (!skin || !skin.aura) return;
+    const color = skin.aura;
+    const shiny = !!skin.shiny;
     const ctx = this.ctx;
     const kid = this.kid;
     const cx = kid.x + kid.w / 2;
@@ -1838,17 +1869,16 @@ class Game {
     const r = kid.w * 0.72 * (1 + 0.04 * Math.sin(t * 3));
 
     const glow = ctx.createRadialGradient(cx, cy, r * 0.4, cx, cy, r);
-    glow.addColorStop(0, `rgba(${color}, ${golden ? 0.5 : 0.34})`);
+    glow.addColorStop(0, `rgba(${color}, ${shiny ? 0.5 : 0.34})`);
     glow.addColorStop(1, `rgba(${color}, 0)`);
     ctx.fillStyle = glow;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
 
-    ctx.strokeStyle = `rgba(${color}, ${golden ? 0.8 : 0.5})`;
-    ctx.lineWidth = golden ? 4 : 3;
+    ctx.strokeStyle = `rgba(${color}, ${shiny ? 0.8 : 0.5})`;
+    ctx.lineWidth = shiny ? 4 : 3;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
 
-    // Orbiting sparkles (more for the golden top level).
-    const count = golden ? 6 : 4;
+    const count = shiny ? 6 : 4;
     for (let k = 0; k < count; k++) {
       const a = t * 2.4 + (k * Math.PI * 2) / count;
       const sx = cx + Math.cos(a) * r * 1.28;
@@ -1859,21 +1889,106 @@ class Game {
     }
   }
 
-  _auraStage() {
-    let stage = 0;
-    for (let i = 0; i < AURA_STAGES.length; i++) {
-      if (this.score >= AURA_STAGES[i].at) stage = i;
+  _handleSkinMenuTap(p) {
+    if (this.skinsBackRect && this._hit(p, this.skinsBackRect)) {
+      this.skinMenuOpen = false;
+      return;
     }
-    return stage;
+    for (let i = 0; i < this.skinSlotRects.length; i++) {
+      if (this._hit(p, this.skinSlotRects[i])) {
+        const skin = SKINS[i];
+        if (skin.cost === 0 || this.bestScore >= skin.cost) {
+          this.selectedSkinId = skin.id;
+          try { localStorage.setItem(SKIN_KEY, skin.id); } catch (e) {}
+        }
+        return;
+      }
+    }
   }
 
-  _checkAura() {
-    const stage = this._auraStage();
-    if (stage > this.auraStage) {
-      this.auraStage = stage;
-      this.audio.playBuild();
-      this._spawnPoof(this.kid.x + this.kid.w / 2, this.kid.y - this.kid.h / 2);
-    }
+  _drawSkinMenu() {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(5, 8, 18, 0.82)";
+    ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+
+    ctx.textAlign = "center";
+    ctx.font = "700 40px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText("CHOOSE YOUR AURA", LOGICAL_W / 2, 68);
+
+    ctx.font = "700 24px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#ffd66b";
+    ctx.fillText("Best Score: " + this.bestScore, LOGICAL_W / 2, 104);
+
+    const slotW = 170, slotH = 210, gap = 14;
+    const totalW = SKINS.length * slotW + (SKINS.length - 1) * gap;
+    let sx = (LOGICAL_W - totalW) / 2;
+    const sy = 136;
+    this.skinSlotRects = [];
+
+    SKINS.forEach((skin) => {
+      const rect = { x: sx, y: sy, w: slotW, h: slotH };
+      this.skinSlotRects.push(rect);
+      const unlocked = skin.cost === 0 || this.bestScore >= skin.cost;
+      const selected = this.selectedSkinId === skin.id;
+
+      ctx.fillStyle = selected ? "rgba(60, 150, 70, 0.92)" : "rgba(20, 28, 48, 0.92)";
+      roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 16);
+      ctx.fill();
+      ctx.strokeStyle = selected ? "#b4ff64" : (unlocked ? "#ffffff" : "#3a4560");
+      ctx.lineWidth = selected ? 4 : 2.5;
+      roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 16);
+      ctx.stroke();
+
+      // Super Kid icon (clear) with the aura colour behind it
+      const iw = 92, ih = 92;
+      const icx = rect.x + slotW / 2;
+      const icy = rect.y + 16 + ih / 2;
+      if (skin.aura) {
+        const g = ctx.createRadialGradient(icx, icy, 10, icx, icy, iw * 0.66);
+        g.addColorStop(0, `rgba(${skin.aura}, 0.5)`);
+        g.addColorStop(1, `rgba(${skin.aura}, 0)`);
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(icx, icy, iw * 0.66, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = `rgba(${skin.aura}, 0.9)`;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(icx, icy, iw * 0.62, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.drawImage(ASSETS.images.player, rect.x + (slotW - iw) / 2, rect.y + 16, iw, ih);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "700 19px 'Comic Neue', 'Comic Sans MS', sans-serif";
+      ctx.fillText(skin.name, rect.x + slotW / 2, rect.y + 138);
+
+      ctx.font = "400 17px 'Comic Neue', 'Comic Sans MS', sans-serif";
+      if (selected) {
+        ctx.fillStyle = "#b4ff64";
+        ctx.fillText("SELECTED", rect.x + slotW / 2, rect.y + 166);
+      } else if (unlocked) {
+        ctx.fillStyle = "#ffd66b";
+        ctx.fillText("TAP TO EQUIP", rect.x + slotW / 2, rect.y + 166);
+      } else {
+        ctx.fillStyle = "#9aa6c0";
+        ctx.fillText("🔒 Score " + skin.cost, rect.x + slotW / 2, rect.y + 166);
+      }
+
+      sx += slotW + gap;
+    });
+
+    // Back button
+    const bw = 220, bh = 56;
+    const bx = (LOGICAL_W - bw) / 2, by = 372;
+    this.skinsBackRect = { x: bx, y: by, w: bw, h: bh };
+    ctx.fillStyle = "rgba(40, 60, 100, 0.9)";
+    roundedRect(ctx, bx, by, bw, bh, 14);
+    ctx.fill();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2.5;
+    roundedRect(ctx, bx, by, bw, bh, 14);
+    ctx.stroke();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "700 26px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillText("Back", LOGICAL_W / 2, by + 38);
   }
 
   _drawCombo() {
