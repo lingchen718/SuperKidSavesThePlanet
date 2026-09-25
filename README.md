@@ -13,8 +13,9 @@ Catch the good eco items, dodge the pollution, answer the quiz questions, and br
 - **🧊 Ice cubes:** catching an ice cube **freezes Super Kid for 3 seconds** before you can move again.
 - **🛡 Shield power-up:** catch a shield to block bad items for 7 seconds.
 - **🔥 Combo system** — catch good items in a row to build a score/health multiplier (resets if a bad item hits you).
-- **🏭 Factories clearing out** — the polluted world starts with **15 blocky factories** that puff pollution smoke. From **20%** health they start to close down — **one factory closes every +2% health** — until the world is clear at 50%.
-- **🎨 Skins** — tap **Skins** on the intro screen to equip a **coloured aura** around Super Kid (Green, Blue, Red, then a **shiny Gold super-power aura** at the highest level). The player image itself stays clear.
+- **👾 Flying monsters** — the polluted world starts with **15 blocky, semi-transparent monsters** drifting in the smog. From **20%** health they start to disappear — **one leaves every +2% health** — until the sky is clear at 50%.
+- **🐝 Bees & butterflies** — once the world turns clean at **50%**, a Minecraft-style bee appears, with **more bees and butterflies arriving every +5% health**.
+- **✨ Aura** — Super Kid gains a **glowing aura that levels up with your score**: shiny green at 20, shiny blue at 50, and a **golden super-power glow** at 100. The Super Kid image itself stays clear.
 - **📈 Difficulty ramp:** items fall a little faster (and slightly more often) every minute.
 - **🏆 Best score** is saved in the browser (localStorage) — no account needed.
 - **Eco quizzes:** every 5 catches opens a quick quiz. Answer correctly for a big +6 health bonus.

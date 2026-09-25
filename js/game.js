@@ -45,31 +45,33 @@ const BEST_SCORE_KEY = "superKidBestScore";
 const COMBO_STEP = 5;                     // good catches per combo level
 const COMBO_MAX = 4;                      // max combo multiplier
 
-const SKIN_KEY = "superKidSkin";
-const SKINS = [
-  { id: "default", name: "Super Kid", cost: 0,   aura: null },
-  { id: "green",   name: "Green Kid", cost: 40,  aura: "110,230,110" },
-  { id: "blue",    name: "Blue Kid",  cost: 90,  aura: "90,180,255" },
-  { id: "red",     name: "Red Kid",   cost: 160, aura: "255,100,100" },
-  { id: "gold",    name: "Gold Kid",  cost: 240, aura: "255,210,80", shiny: true },
+// Flying monsters polluting the world (blocky, semi-transparent, disappear as it heals)
+const MONSTER_START = 15;          // monsters at the start
+const MONSTER_FADE_START = 20;     // they start disappearing at 20% health
+const MONSTER_FADE_STEP = 2;       // one leaves every +2% health
+const MONSTER_PX = 10;
+const MONSTER_ROWS = [
+  ".DDDDD.",
+  "DMMMMMD",
+  "DMEMMED",
+  "DMMMMMD",
+  "DMMMMMD",
+  ".D.D.D.",
 ];
+const MONSTER_PALETTE = { M: "#7a6d60", D: "#4f453c", E: "#201811" };
 
-// Factories polluting the world (blocky, disappear as the world heals)
-const FACTORY_START = 15;         // factories at the start
-const FACTORY_FADE_START = 20;    // they start closing at 20% health
-const FACTORY_FADE_STEP = 2;      // one closes every +2% health
-const FACTORY_PX = 8;
-const FACTORY_ROWS = [
-  ".C..C.",
-  ".C..C.",
-  ".C..C.",
-  "RRRRRR",
-  "BBBBBB",
-  "BWWBWW",
-  "BBBBBB",
-  "BBBBBB",
+// Bees & butterflies arrive in the clean world
+const BEE_START = 50;              // first bee at 50% health
+const BEE_STEP = 5;                // one more every +5% health
+const BEE_MAX = 10;                // max flying creatures
+
+// Score-stage player aura (shiny glow levels, golden at the top)
+const AURA_STAGES = [
+  { at: 0,   color: null },
+  { at: 20,  color: "110,230,160" },   // shiny green
+  { at: 50,  color: "110,190,255" },   // shiny blue
+  { at: 100, color: "255,210,80" },    // golden
 ];
-const FACTORY_PALETTE = { C: "#4a4a52", R: "#6b5d4a", B: "#8a6a4a", W: "#ffd66b" };
 
 /* ------------------------------ Utilities ------------------------------ */
 
@@ -609,17 +611,13 @@ class Game {
     this.comboPopup = "";
     this.comboPopupTimer = 0;
 
-    // Factories polluting the world (they disappear as the world heals)
-    this.factories = [];
-    this.bursts = [];           // poof particles
+    // Flying monsters + clean-world creatures
+    this.monsters = [];         // blocky semi-transparent monsters (polluted)
+    this.creatures = [];        // bees + butterflies (clean)
+    this.bursts = [];           // poof / confetti particles
 
-    // Skins (cosmetic)
-    this.selectedSkinId = "default";
-    try { this.selectedSkinId = localStorage.getItem(SKIN_KEY) || "default"; } catch (e) {}
-    this.skinMenuOpen = false;
-    this.skinsButtonRect = null;
-    this.skinSlotRects = [];
-    this.skinsBackRect = null;
+    // Score-stage aura
+    this.auraStage = 0;
 
     // Best score (persisted in the browser)
     this.bestScore = 0;
@@ -715,14 +713,6 @@ class Game {
     const p = this._toLogical(e);
 
     if (this.state === STATE.INTRO) {
-      if (this.skinMenuOpen) {
-        this._handleSkinMenuTap(p);
-        return;
-      }
-      if (this.skinsButtonRect && this._hit(p, this.skinsButtonRect)) {
-        this.skinMenuOpen = true;
-        return;
-      }
       this._startGame();
       return;
     }
@@ -785,10 +775,6 @@ class Game {
     }
 
     if (this.state === STATE.INTRO) {
-      if (this.skinMenuOpen) {
-        if (k === "Escape" || k === "Backspace") this.skinMenuOpen = false;
-        return;
-      }
       if (k === "Enter" || k === " ") this._startGame();
       return;
     }
@@ -859,9 +845,11 @@ class Game {
     this.comboMult = 1;
     this.comboPopup = "";
     this.comboPopupTimer = 0;
-    this.factories = [];
+    this.monsters = [];
+    this.creatures = [];
     this.bursts = [];
-    this._spawnFactories();
+    this.auraStage = 0;
+    this._spawnMonsters();
     this._syncPauseButton();
     this._resetPlayerPosition();
     this.audio.playMusic("polluted");
@@ -1056,7 +1044,7 @@ class Game {
     if (this.state === STATE.PLAYING || this.state === STATE.GAMEOVER) {
       this._updateAmbient(dt);
       this._updateBursts(dt);
-      this._updateFactories(dt);
+      this._updateFlyers(dt);
     }
 
     if (this.state === STATE.INTRO) {
@@ -1099,7 +1087,9 @@ class Game {
       this._checkCleanMode();
     }
 
-    this._checkFactories();
+    this._checkMonsters();
+    this._checkCreatures();
+    this._checkAura();
     if (this.comboPopupTimer > 0) this.comboPopupTimer -= dt;
     if (this.cleanMsgTimer > 0) this.cleanMsgTimer -= dt;
   }
@@ -1429,7 +1419,6 @@ class Game {
     switch (this.state) {
       case STATE.INTRO:
         this._drawIntro();
-        if (this.skinMenuOpen) this._drawSkinMenu();
         break;
       case STATE.PLAYING:  this._drawPlaying(); break;
       case STATE.WON:      this._drawWin(); break;
@@ -1517,19 +1506,6 @@ class Game {
     ctx.fillStyle = `rgba(${Math.round(160 * pulse + 60)}, ${Math.round(200 * pulse + 40)}, ${Math.round(230 * pulse + 25)}, 1)`;
     ctx.fillText(msg, LOGICAL_W / 2, LOGICAL_H * 0.9);
 
-    // Skins button (bottom-left corner)
-    const sbw = 160, sbh = 50, sbx = 34, sby = LOGICAL_H - 72;
-    this.skinsButtonRect = { x: sbx, y: sby, w: sbw, h: sbh };
-    ctx.fillStyle = "rgba(20, 30, 55, 0.82)";
-    roundedRect(ctx, sbx, sby, sbw, sbh, 12);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.5)";
-    ctx.lineWidth = 2;
-    roundedRect(ctx, sbx, sby, sbw, sbh, 12);
-    ctx.stroke();
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "700 24px 'Comic Neue', 'Comic Sans MS', sans-serif";
-    ctx.fillText("🎨 Skins", sbx + sbw / 2, sby + 33);
   }
 
   _drawPlaying() {
@@ -1555,8 +1531,9 @@ class Game {
     // Subtle animated layer on top of the original background
     this._drawAmbient();
 
-    // Factories + poof particles
-    this._drawFactories();
+    // Flying monsters + clean-world creatures + poof particles
+    this._drawMonsters();
+    this._drawCreatures();
     this._drawBursts();
 
     // Items (with colour-coded effects so players can read them at a glance)
@@ -1664,59 +1641,122 @@ class Game {
     ctx.fill();
   }
 
-  /* ---------------- Factories creating pollution (blocky) ---------------- */
+  /* ------------- Flying monsters + clean-world creatures ------------- */
 
-  _spawnFactories() {
-    this.factories = [];
-    for (let i = 0; i < FACTORY_START; i++) {
-      const s = rand(0.75, 1.1);
-      const x = 46 + (i / (FACTORY_START - 1)) * (LOGICAL_W - 92) + rand(-10, 10);
-      this.factories.push({ x, s, phase: rand(0, Math.PI * 2) });
+  _spawnMonsters() {
+    this.monsters = [];
+    for (let i = 0; i < MONSTER_START; i++) {
+      this.monsters.push({
+        x: rand(70, LOGICAL_W - 70),
+        y: rand(140, 520),
+        vx: (Math.random() < 0.5 ? -1 : 1) * rand(30, 60),
+        phase: rand(0, Math.PI * 2),
+        born: performance.now() + i * 120,
+      });
     }
   }
 
-  _factoryTopY(f) {
-    return LOGICAL_H - 26 - FACTORY_ROWS.length * FACTORY_PX * f.s;
+  _targetMonsterCount() {
+    if (this.health < MONSTER_FADE_START) return MONSTER_START;
+    const removed = Math.min(MONSTER_START, 1 + Math.floor((this.health - MONSTER_FADE_START) / MONSTER_FADE_STEP));
+    return MONSTER_START - removed;
   }
 
-  _updateFactories(dt) {
-    // Every factory puffs pollution smoke from one of its two chimneys.
-    for (const f of this.factories) {
-      if (Math.random() < 0.4 * dt) {
-        const side = Math.random() < 0.5 ? -1 : 1;
-        const chimX = f.x + side * 1.5 * FACTORY_PX * f.s;
-        this.ambient.push({
-          kind: "brown",
-          x: chimX + rand(-4, 4),
-          y: this._factoryTopY(f) - 2,
-          vx: rand(-5, 5),
-          vy: rand(-32, -20),
-          r: rand(8, 13),
-          grow: rand(3, 5),
-          baseAlpha: rand(0.16, 0.26),
-          phase: rand(0, Math.PI * 2),
-          age: 0,
-          maxLife: rand(4, 6),
-        });
-      }
-    }
-  }
-
-  _checkFactories() {
-    const target = this._targetFactoryCount();
-    while (this.factories.length > target) {
-      const idx = Math.floor(Math.random() * this.factories.length);
-      const f = this.factories[idx];
-      this.factories.splice(idx, 1);
-      this._spawnPoof(f.x, LOGICAL_H - 50);
+  _checkMonsters() {
+    const target = this._targetMonsterCount();
+    while (this.monsters.length > target) {
+      const idx = Math.floor(Math.random() * this.monsters.length);
+      const m = this.monsters[idx];
+      this.monsters.splice(idx, 1);
+      this._spawnPoof(m.x, m.y);
       this.audio.playPoof();
     }
   }
 
-  _targetFactoryCount() {
-    if (this.health < FACTORY_FADE_START) return FACTORY_START;
-    const removed = Math.min(FACTORY_START, 1 + Math.floor((this.health - FACTORY_FADE_START) / FACTORY_FADE_STEP));
-    return FACTORY_START - removed;
+  _targetCreatureCount() {
+    if (this.health < BEE_START) return 0;
+    return Math.min(BEE_MAX, 1 + Math.floor((this.health - BEE_START) / BEE_STEP));
+  }
+
+  _addCreature() {
+    const kind = this.creatures.length === 0 ? "bee" : (Math.random() < 0.5 ? "bee" : "butterfly");
+    this.creatures.push({
+      kind,
+      x: rand(80, LOGICAL_W - 80),
+      y: rand(140, 520),
+      vx: (Math.random() < 0.5 ? -1 : 1) * rand(24, 46),
+      phase: rand(0, Math.PI * 2),
+      born: performance.now(),
+    });
+    if (this.creatures.length === 1) this.audio.playBuild();
+  }
+
+  _checkCreatures() {
+    const target = this._targetCreatureCount();
+    while (this.creatures.length < target) this._addCreature();
+  }
+
+  _updateFlyers(dt) {
+    const all = this.monsters.concat(this.creatures);
+    for (const f of all) {
+      f.x += f.vx * dt;
+      if (f.x < 30) { f.x = 30; f.vx = Math.abs(f.vx); }
+      if (f.x > LOGICAL_W - 30) { f.x = LOGICAL_W - 30; f.vx = -Math.abs(f.vx); }
+    }
+  }
+
+  /* Bouncy pop-in scale. */
+  _popScale(t) {
+    if (t <= 0) return 0;
+    if (t >= 1) return 1;
+    const c1 = 1.70158, c3 = c1 + 1;
+    return clamp(1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2), 0, 1.2);
+  }
+
+  _drawMonsters() {
+    const ctx = this.ctx;
+    const t = performance.now() / 1000;
+    for (const m of this.monsters) {
+      const s = this._popScale((performance.now() - m.born) / 400);
+      const y = m.y + Math.sin(t * 2 + m.phase) * 16;
+      this._drawMonster(ctx, m.x, y, s);
+    }
+  }
+
+  _drawMonster(ctx, x, y, s) {
+    const px = MONSTER_PX;
+    const w = MONSTER_ROWS[0].length, h = MONSTER_ROWS.length;
+    ctx.save();
+    ctx.globalAlpha = 0.5;   // a little bit invisible but disturbing
+    this._drawPattern(ctx, MONSTER_ROWS, MONSTER_PALETTE, x - (w * px * s) / 2, y - (h * px * s) / 2, px, s);
+    ctx.restore();
+  }
+
+  _drawCreatures() {
+    const ctx = this.ctx;
+    const t = performance.now() / 1000;
+    for (const c of this.creatures) {
+      const s = this._popScale((performance.now() - c.born) / 400);
+      const y = c.y + Math.sin(t * 2 + c.phase) * 18;
+      if (c.kind === "bee") this._drawBee(ctx, c.x, y, s);
+      else this._drawButterfly(ctx, c.x, y, s);
+    }
+  }
+
+  _drawBee(ctx, x, y, s) {
+    const px = 7;
+    const rows = [".WW.", "BBYY", "YYBB", "BBYY"];
+    const palette = { W: "rgba(234,246,255,0.92)", B: "#2b2b2b", Y: "#f5c542" };
+    const w = rows[0].length, h = rows.length;
+    this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - (h * px * s) / 2, px, s);
+  }
+
+  _drawButterfly(ctx, x, y, s) {
+    const px = 7;
+    const rows = ["P....P", "PPBBPP", ".PBBP."];
+    const palette = { P: "#ff8fa3", B: "#4a2c1a" };
+    const w = rows[0].length, h = rows.length;
+    this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - (h * px * s) / 2, px, s);
   }
 
   _spawnPoof(x, y) {
@@ -1784,23 +1824,12 @@ class Game {
     }
   }
 
-  _drawFactories() {
-    const ctx = this.ctx;
-    for (const f of this.factories) {
-      this._drawFactory(ctx, f);
-    }
-  }
-
-  _drawFactory(ctx, f) {
-    const w = FACTORY_ROWS[0].length, h = FACTORY_ROWS.length;
-    const px = FACTORY_PX, s = f.s;
-    this._drawPattern(ctx, FACTORY_ROWS, FACTORY_PALETTE, f.x - (w * px * s) / 2, LOGICAL_H - 26 - h * px * s, px, s);
-  }
-
-  /* A glowing halo around the player based on the equipped skin. */
+  /* A glowing halo around the player that levels up with the score. */
   _drawPlayerAura() {
-    const skin = SKINS.find((s) => s.id === this.selectedSkinId) || SKINS[0];
-    if (!skin || !skin.aura) return;
+    const stage = this._auraStage();
+    if (stage <= 0) return;
+    const color = AURA_STAGES[stage].color;
+    const golden = stage >= AURA_STAGES.length - 1;
     const ctx = this.ctx;
     const kid = this.kid;
     const cx = kid.x + kid.w / 2;
@@ -1809,24 +1838,41 @@ class Game {
     const r = kid.w * 0.72 * (1 + 0.04 * Math.sin(t * 3));
 
     const glow = ctx.createRadialGradient(cx, cy, r * 0.4, cx, cy, r);
-    glow.addColorStop(0, `rgba(${skin.aura}, ${skin.shiny ? 0.45 : 0.28})`);
-    glow.addColorStop(1, `rgba(${skin.aura}, 0)`);
+    glow.addColorStop(0, `rgba(${color}, ${golden ? 0.5 : 0.34})`);
+    glow.addColorStop(1, `rgba(${color}, 0)`);
     ctx.fillStyle = glow;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
 
-    ctx.strokeStyle = `rgba(${skin.aura}, ${skin.shiny ? 0.75 : 0.45})`;
-    ctx.lineWidth = skin.shiny ? 4 : 3;
+    ctx.strokeStyle = `rgba(${color}, ${golden ? 0.8 : 0.5})`;
+    ctx.lineWidth = golden ? 4 : 3;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
 
-    if (skin.shiny) {
-      for (let k = 0; k < 6; k++) {
-        const a = t * 2.4 + (k * Math.PI) / 3;
-        const sx = cx + Math.cos(a) * r * 1.28;
-        const sy = cy + Math.sin(a) * r * 1.28;
-        const tw = 0.5 + 0.5 * Math.sin(t * 7 + k);
-        ctx.fillStyle = `rgba(255, 235, 150, ${0.5 + 0.5 * tw})`;
-        ctx.beginPath(); ctx.arc(sx, sy, 3 + tw * 2, 0, Math.PI * 2); ctx.fill();
-      }
+    // Orbiting sparkles (more for the golden top level).
+    const count = golden ? 6 : 4;
+    for (let k = 0; k < count; k++) {
+      const a = t * 2.4 + (k * Math.PI * 2) / count;
+      const sx = cx + Math.cos(a) * r * 1.28;
+      const sy = cy + Math.sin(a) * r * 1.28;
+      const tw = 0.5 + 0.5 * Math.sin(t * 7 + k);
+      ctx.fillStyle = `rgba(255, 235, 150, ${0.5 + 0.5 * tw})`;
+      ctx.beginPath(); ctx.arc(sx, sy, 3 + tw * 2, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  _auraStage() {
+    let stage = 0;
+    for (let i = 0; i < AURA_STAGES.length; i++) {
+      if (this.score >= AURA_STAGES[i].at) stage = i;
+    }
+    return stage;
+  }
+
+  _checkAura() {
+    const stage = this._auraStage();
+    if (stage > this.auraStage) {
+      this.auraStage = stage;
+      this.audio.playBuild();
+      this._spawnPoof(this.kid.x + this.kid.w / 2, this.kid.y - this.kid.h / 2);
     }
   }
 
@@ -1863,115 +1909,6 @@ class Game {
     }
   }
 
-  /* ----------------------------- Skins ---------------------------------- */
-
-  _playerSprite() {
-    return this._skinSprite(this.selectedSkinId);
-  }
-
-  _skinSprite(id) {
-    return ASSETS.images.player;
-  }
-
-  _handleSkinMenuTap(p) {
-    if (this.skinsBackRect && this._hit(p, this.skinsBackRect)) {
-      this.skinMenuOpen = false;
-      return;
-    }
-    for (let i = 0; i < this.skinSlotRects.length; i++) {
-      if (this._hit(p, this.skinSlotRects[i])) {
-        const skin = SKINS[i];
-        if (skin.cost === 0 || this.bestScore >= skin.cost) {
-          this.selectedSkinId = skin.id;
-          try { localStorage.setItem(SKIN_KEY, skin.id); } catch (e) {}
-        }
-        return;
-      }
-    }
-  }
-
-  _drawSkinMenu() {
-    const ctx = this.ctx;
-    ctx.fillStyle = "rgba(5, 8, 18, 0.82)";
-    ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
-
-    ctx.textAlign = "center";
-    ctx.font = "700 40px 'Comic Neue', 'Comic Sans MS', sans-serif";
-    ctx.fillStyle = "#ffffff";
-    ctx.fillText("CHOOSE YOUR HERO", LOGICAL_W / 2, 68);
-
-    ctx.font = "700 24px 'Comic Neue', 'Comic Sans MS', sans-serif";
-    ctx.fillStyle = "#ffd66b";
-    ctx.fillText("Best Score: " + this.bestScore, LOGICAL_W / 2, 104);
-
-    const slotW = 170, slotH = 210, gap = 14;
-    const totalW = SKINS.length * slotW + (SKINS.length - 1) * gap;
-    let sx = (LOGICAL_W - totalW) / 2;
-    const sy = 136;
-    this.skinSlotRects = [];
-
-    SKINS.forEach((skin) => {
-      const rect = { x: sx, y: sy, w: slotW, h: slotH };
-      this.skinSlotRects.push(rect);
-      const unlocked = skin.cost === 0 || this.bestScore >= skin.cost;
-      const selected = this.selectedSkinId === skin.id;
-
-      ctx.fillStyle = selected ? "rgba(60, 150, 70, 0.92)" : "rgba(20, 28, 48, 0.92)";
-      roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 16);
-      ctx.fill();
-      ctx.strokeStyle = selected ? "#b4ff64" : (unlocked ? "#ffffff" : "#3a4560");
-      ctx.lineWidth = selected ? 4 : 2.5;
-      roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 16);
-      ctx.stroke();
-
-      const icon = this._skinSprite(skin.id);
-      const iw = 92, ih = 92;
-      const icx = rect.x + slotW / 2;
-      const icy = rect.y + 16 + ih / 2;
-      if (skin.aura) {
-        ctx.fillStyle = `rgba(${skin.aura}, 0.35)`;
-        ctx.beginPath(); ctx.arc(icx, icy, iw * 0.62, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = `rgba(${skin.aura}, 0.85)`;
-        ctx.lineWidth = 2.5;
-        ctx.beginPath(); ctx.arc(icx, icy, iw * 0.62, 0, Math.PI * 2); ctx.stroke();
-      }
-      ctx.drawImage(icon, rect.x + (slotW - iw) / 2, rect.y + 16, iw, ih);
-
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "700 19px 'Comic Neue', 'Comic Sans MS', sans-serif";
-      ctx.fillText(skin.name, rect.x + slotW / 2, rect.y + 138);
-
-      ctx.font = "400 17px 'Comic Neue', 'Comic Sans MS', sans-serif";
-      if (selected) {
-        ctx.fillStyle = "#b4ff64";
-        ctx.fillText("SELECTED", rect.x + slotW / 2, rect.y + 166);
-      } else if (unlocked) {
-        ctx.fillStyle = "#ffd66b";
-        ctx.fillText("TAP TO EQUIP", rect.x + slotW / 2, rect.y + 166);
-      } else {
-        ctx.fillStyle = "#9aa6c0";
-        ctx.fillText("🔒 Score " + skin.cost, rect.x + slotW / 2, rect.y + 166);
-      }
-
-      sx += slotW + gap;
-    });
-
-    // Back button
-    const bw = 220, bh = 56;
-    const bx = (LOGICAL_W - bw) / 2, by = 372;
-    this.skinsBackRect = { x: bx, y: by, w: bw, h: bh };
-    ctx.fillStyle = "rgba(40, 60, 100, 0.9)";
-    roundedRect(ctx, bx, by, bw, bh, 14);
-    ctx.fill();
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2.5;
-    roundedRect(ctx, bx, by, bw, bh, 14);
-    ctx.stroke();
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "700 26px 'Comic Neue', 'Comic Sans MS', sans-serif";
-    ctx.fillText("Back", LOGICAL_W / 2, by + 38);
-  }
-
   _drawKid() {
     const ctx = this.ctx;
     const kid = this.kid;
@@ -2001,7 +1938,7 @@ class Game {
     if (!kid.facingRight) ctx.scale(-1, 1);
 
     // Draw the selected skin (with a tint for flash effects).
-    const flash = this._flashedSprite(this._playerSprite(), kid);
+    const flash = this._flashedSprite(ASSETS.images.player, kid);
     ctx.drawImage(flash, -drawW / 2, -drawH / 2, drawW, drawH);
     ctx.restore();
   }
