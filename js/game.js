@@ -54,6 +54,23 @@ const SKINS = [
   { id: "purple",  name: "Purple Wizard", cost: 240, shirt: "#8e5bd9", pants: "#6b3fa8", hair: "#3a2a1a", hat: "#7a4fc9" },
 ];
 
+// World-rebuild schedule (blocky, Minecraft-style scenery)
+const REBUILD_TREE_START = 20;      // first tree at 20% planet health
+const REBUILD_TREE_STEP = 3;        // then a new tree every +3%
+const REBUILD_TREE_MAX = 10;        // max trees
+const REBUILD_BEE_START = 50;       // bees appear at 50%
+const REBUILD_BEE_STEP = 5;         // more bees / butterflies every +5%
+const REBUILD_CREATURE_MAX = 10;    // max flying creatures
+const REBUILD_WINDMILL_AT = 75;     // windmill at 75%
+
+// Score-stage skin tint (basic auto look-up as points climb)
+const SKIN_STAGES = [
+  { at: 0,   tint: null },
+  { at: 20,  tint: "140,255,140" },   // eco green
+  { at: 50,  tint: "110,190,255" },   // sky blue
+  { at: 100, tint: "255,205,90" },    // golden
+];
+
 /* ------------------------------ Utilities ------------------------------ */
 
 function rand(min, max) {
@@ -548,6 +565,28 @@ class AudioManager {
     });
   }
 
+  /* A soft magical sparkle for world-rebuild milestones. */
+  playBuild() {
+    if (!this.unlocked || this.muted) return;
+    this.resumeCtx();
+    if (!this.ac) return;
+    const t = this.ac.currentTime;
+    const gain = this.ac.createGain();
+    gain.connect(this.ac.destination);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.16, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+
+    [523, 659, 784, 1047].forEach((freq, i) => {
+      const osc = this.ac.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, t + i * 0.06);
+      osc.connect(gain);
+      osc.start(t + i * 0.06);
+      osc.stop(t + 0.95);
+    });
+  }
+
 }
 
 /* ------------------------------ Game ----------------------------------- */
@@ -615,6 +654,18 @@ class Game {
     this.comboMult = 1;
     this.comboPopup = "";
     this.comboPopupTimer = 0;
+
+    // World-rebuild progress
+    this.trees = [];            // blocky trees (static ground scenery)
+    this.creatures = [];        // bees + butterflies (flying)
+    this.windmill = null;       // { x, born }
+    this.rebuildMsg = "";
+    this.rebuildMsgTimer = 0;
+    this.bursts = [];           // confetti bursts for rebuild pop-ins
+
+    // Score-stage skin tint
+    this.skinStage = 0;
+    this.skinCache = null;
 
     // Skins (cosmetic)
     this.selectedSkinId = "default";
@@ -862,6 +913,13 @@ class Game {
     this.comboMult = 1;
     this.comboPopup = "";
     this.comboPopupTimer = 0;
+    this.trees = [];
+    this.creatures = [];
+    this.windmill = null;
+    this.rebuildMsg = "";
+    this.rebuildMsgTimer = 0;
+    this.bursts = [];
+    this.skinStage = 0;
     this._syncPauseButton();
     this._resetPlayerPosition();
     this.audio.playMusic("polluted");
@@ -1055,6 +1113,8 @@ class Game {
     // Keep the background alive on the play + game-over screens.
     if (this.state === STATE.PLAYING || this.state === STATE.GAMEOVER) {
       this._updateAmbient(dt);
+      this._updateBursts(dt);
+      this._updateCreatures(dt);
     }
 
     if (this.state === STATE.INTRO) {
@@ -1097,6 +1157,9 @@ class Game {
       this._checkCleanMode();
     }
 
+    this._checkRebuild();
+    this._checkSkin();
+    if (this.rebuildMsgTimer > 0) this.rebuildMsgTimer -= dt;
     if (this.comboPopupTimer > 0) this.comboPopupTimer -= dt;
     if (this.cleanMsgTimer > 0) this.cleanMsgTimer -= dt;
   }
@@ -1206,11 +1269,15 @@ class Game {
 
   _updateAmbient(dt) {
     if (this.cleanMode) {
-      if (Math.random() < 2.5 * dt) this._spawnPetal();
-      if (Math.random() < 1.5 * dt) this._spawnSpark();
+      // More life as the planet gets healthier (50 -> 100).
+      const life = 1 + 0.8 * clamp((this.health - CLEAN_HEALTH_THRESHOLD) / 50, 0, 1);
+      if (Math.random() < 2.5 * life * dt) this._spawnPetal();
+      if (Math.random() < 1.5 * life * dt) this._spawnSpark();
     } else {
-      if (Math.random() < 2.5 * dt) this._spawnSmoke();
-      if (Math.random() < 1.6 * dt) this._spawnBrownSmoke();
+      // Smoke thins out as the planet cleans up (0 -> 50).
+      const smog = 1 - 0.75 * clamp(this.health / CLEAN_HEALTH_THRESHOLD, 0, 1);
+      if (Math.random() < 2.5 * smog * dt) this._spawnSmoke();
+      if (Math.random() < 1.6 * smog * dt) this._spawnBrownSmoke();
     }
 
     for (let i = this.ambient.length - 1; i >= 0; i--) {
@@ -1548,6 +1615,11 @@ class Game {
     // Subtle animated layer on top of the original background
     this._drawAmbient();
 
+    // Rebuilt scenery + flying creatures + milestone confetti
+    this._drawDecorations();
+    this._drawCreatures();
+    this._drawBursts();
+
     // Items (with colour-coded effects so players can read them at a glance)
     for (const item of this.items) {
       this._drawItemEffects(item);
@@ -1568,6 +1640,9 @@ class Game {
 
     // Combo indicator
     this._drawCombo();
+
+    // Rebuild milestone banner
+    if (this.rebuildMsgTimer > 0) this._drawRebuildMessage();
 
     // Clean-mode unlock message
     if (this.cleanMsgTimer > 0) this._drawCleanMessage();
@@ -1648,6 +1723,300 @@ class Game {
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  /* ------------- World-rebuild progress (blocky, Minecraft-style) ------------- */
+
+  _checkRebuild() {
+    // Trees: first at 20%, then one more every +3% (capped).
+    const targetTrees = this.health >= REBUILD_TREE_START
+      ? Math.min(REBUILD_TREE_MAX, 1 + Math.floor((this.health - REBUILD_TREE_START) / REBUILD_TREE_STEP))
+      : 0;
+    while (this.trees.length < targetTrees) this._addTree();
+
+    // Bees / butterflies: first at 50%, then one more every +5%.
+    const targetCreatures = this.health >= REBUILD_BEE_START
+      ? Math.min(REBUILD_CREATURE_MAX, 1 + Math.floor((this.health - REBUILD_BEE_START) / REBUILD_BEE_STEP))
+      : 0;
+    while (this.creatures.length < targetCreatures) this._addCreature();
+
+    // Windmill at 75%.
+    if (this.health >= REBUILD_WINDMILL_AT && !this.windmill) this._addWindmill();
+  }
+
+  _addTree() {
+    const x = 70 + this.trees.length * 105 + rand(-12, 12);
+    this.trees.push({ x, born: performance.now() });
+    this._spawnBuildBurst(x, LOGICAL_H - 46, 10);
+    if (this.trees.length === 1) {
+      this.rebuildMsg = "A tree is growing!";
+      this.rebuildMsgTimer = 2.2;
+      this.audio.playBuild();
+    }
+  }
+
+  _addCreature() {
+    const kind = this.creatures.length === 0 ? "bee" : (Math.random() < 0.5 ? "bee" : "butterfly");
+    this.creatures.push({
+      kind,
+      x: rand(80, LOGICAL_W - 80),
+      y: rand(140, 520),
+      vx: (Math.random() < 0.5 ? -1 : 1) * rand(24, 46),
+      phase: rand(0, Math.PI * 2),
+      born: performance.now(),
+    });
+    if (this.creatures.length === 1) this.audio.playBuild();
+  }
+
+  _addWindmill() {
+    this.windmill = { x: 1080, born: performance.now() };
+    this.rebuildMsg = "A windmill is turning!";
+    this.rebuildMsgTimer = 2.5;
+    this.audio.playBuild();
+    this._spawnBuildBurst(1080, LOGICAL_H - 70, 24);
+  }
+
+  _spawnBuildBurst(x, y, count = 20) {
+    const colors = ["#64ff78", "#b4ff64", "#ffd66b", "#50c8ff", "#ffb3c6"];
+    for (let i = 0; i < count; i++) {
+      this.bursts.push({
+        x, y,
+        vx: rand(-170, 170),
+        vy: rand(-280, -60),
+        size: rand(4, 9),
+        color: pick(colors),
+        rot: rand(0, Math.PI * 2),
+        spin: rand(-7, 7),
+        shape: Math.random() < 0.5 ? "circle" : "rect",
+        age: 0,
+        life: rand(0.8, 1.4),
+      });
+    }
+  }
+
+  _updateBursts(dt) {
+    for (let i = this.bursts.length - 1; i >= 0; i--) {
+      const p = this.bursts[i];
+      p.age += dt;
+      p.vy += 620 * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.rot += p.spin * dt;
+      if (p.age >= p.life) this.bursts.splice(i, 1);
+    }
+  }
+
+  _drawBursts() {
+    const ctx = this.ctx;
+    for (const p of this.bursts) {
+      ctx.save();
+      ctx.globalAlpha = clamp(1 - p.age / p.life, 0, 1);
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      if (p.shape === "rect") {
+        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+      } else {
+        ctx.beginPath();
+        ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  /* Blocky pixel-art renderer (Minecraft-ish). */
+  _drawPattern(ctx, rows, palette, x, y, px, s) {
+    const p = px * s;
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r];
+      for (let c = 0; c < row.length; c++) {
+        const ch = row[c];
+        if (ch === "." || ch === " ") continue;
+        const col = palette[ch];
+        if (!col) continue;
+        ctx.fillStyle = col;
+        ctx.fillRect(x + c * p, y + r * p, p, p);
+      }
+    }
+  }
+
+  /* Bouncy pop-in scale for rebuilt scenery. */
+  _popScale(t) {
+    if (t <= 0) return 0;
+    if (t >= 1) return 1;
+    const c1 = 1.70158, c3 = c1 + 1;
+    return clamp(1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2), 0, 1.2);
+  }
+
+  _drawDecorations() {
+    const ctx = this.ctx;
+    const y = LOGICAL_H - 26;
+    const t = performance.now() / 1000;
+    for (const tr of this.trees) {
+      const s = this._popScale((performance.now() - tr.born) / 400);
+      this._drawTree(ctx, tr.x, y, s);
+    }
+    if (this.windmill) {
+      const s = this._popScale((performance.now() - this.windmill.born) / 400);
+      this._drawWindmill(ctx, this.windmill.x, y, s, t);
+    }
+  }
+
+  _drawTree(ctx, x, y, s) {
+    const px = 11;
+    const rows = [
+      "HGGGG",
+      "GGGGG",
+      "GDDDG",
+      ".TTT.",
+      ".TTT.",
+    ];
+    const palette = { H: "#5ab05a", G: "#3e8f3e", D: "#2f6e2f", T: "#6d4c2f" };
+    const w = rows[0].length, h = rows.length;
+    this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - h * px * s, px, s);
+  }
+
+  _drawWindmill(ctx, x, y, s, t) {
+    const px = 11;
+    const rows = [
+      "..R..",
+      ".RRR.",
+      "TTTTT",
+      "TWTWT",
+      "TTTTT",
+      ".TTT.",
+      ".TTT.",
+    ];
+    const palette = { R: "#c0392b", T: "#e8dcc0", W: "#7fb3d5" };
+    const w = rows[0].length, h = rows.length;
+    const ox = x - (w * px * s) / 2;
+    const oy = y - h * px * s;
+    this._drawPattern(ctx, rows, palette, ox, oy, px, s);
+
+    // Rotating blades at the top of the tower.
+    const hubX = x, hubY = oy + px * 1.6 * s;
+    const bladeLen = 30 * s, bladeW = 6 * s;
+    ctx.save();
+    ctx.translate(hubX, hubY);
+    ctx.rotate(t * 1.6);
+    ctx.fillStyle = "#f5f0e0";
+    for (let k = 0; k < 4; k++) {
+      ctx.save();
+      ctx.rotate((k * Math.PI) / 2);
+      ctx.fillRect(-bladeW / 2, -bladeLen, bladeW, bladeLen);
+      ctx.restore();
+    }
+    ctx.fillStyle = "#8b7a55";
+    ctx.fillRect(-5 * s, -5 * s, 10 * s, 10 * s);
+    ctx.restore();
+  }
+
+  _updateCreatures(dt) {
+    for (const c of this.creatures) {
+      c.x += c.vx * dt;
+      if (c.x < 30) { c.x = 30; c.vx = Math.abs(c.vx); }
+      if (c.x > LOGICAL_W - 30) { c.x = LOGICAL_W - 30; c.vx = -Math.abs(c.vx); }
+    }
+  }
+
+  _drawCreatures() {
+    const ctx = this.ctx;
+    const t = performance.now() / 1000;
+    for (const c of this.creatures) {
+      const s = this._popScale((performance.now() - c.born) / 400);
+      const y = c.y + Math.sin(t * 2 + c.phase) * 18;
+      if (c.kind === "bee") this._drawBee(ctx, c.x, y, s);
+      else this._drawButterfly(ctx, c.x, y, s);
+    }
+  }
+
+  _drawBee(ctx, x, y, s) {
+    const px = 7;
+    const rows = [
+      ".WW.",
+      "BBYY",
+      "YYBB",
+      "BBYY",
+    ];
+    const palette = { W: "rgba(234,246,255,0.92)", B: "#2b2b2b", Y: "#f5c542" };
+    const w = rows[0].length, h = rows.length;
+    this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - (h * px * s) / 2, px, s);
+  }
+
+  _drawButterfly(ctx, x, y, s) {
+    const px = 7;
+    const rows = [
+      "P....P",
+      "PPBBPP",
+      ".PBBP.",
+    ];
+    const palette = { P: "#ff8fa3", B: "#4a2c1a" };
+    const w = rows[0].length, h = rows.length;
+    this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - (h * px * s) / 2, px, s);
+  }
+
+  _drawRebuildMessage() {
+    if (this.rebuildMsgTimer <= 0) return;
+    const ctx = this.ctx;
+    const alpha = clamp(this.rebuildMsgTimer / 0.4, 0, 1);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.textAlign = "center";
+    ctx.font = "700 30px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    const msg = this.rebuildMsg;
+    const tw = ctx.measureText(msg).width;
+    const y = 148;
+    ctx.fillStyle = "rgba(20, 90, 30, 0.85)";
+    roundedRect(ctx, LOGICAL_W / 2 - tw / 2 - 22, y - 30, tw + 44, 52, 14);
+    ctx.fill();
+    ctx.strokeStyle = "#b4ff64";
+    ctx.lineWidth = 2.5;
+    roundedRect(ctx, LOGICAL_W / 2 - tw / 2 - 22, y - 30, tw + 44, 52, 14);
+    ctx.stroke();
+    ctx.fillStyle = "#d9ffd9";
+    ctx.fillText(msg, LOGICAL_W / 2, y + 4);
+    ctx.restore();
+  }
+
+  /* ----------------- Score-stage skin tint (basic auto look-up) ----------------- */
+
+  _skinTint() {
+    let tint = null;
+    for (const st of SKIN_STAGES) {
+      if (this.score >= st.at) tint = st.tint;
+    }
+    return tint;
+  }
+
+  _checkSkin() {
+    let stage = 0;
+    for (let i = 0; i < SKIN_STAGES.length; i++) {
+      if (this.score >= SKIN_STAGES[i].at) stage = i;
+    }
+    if (stage > this.skinStage) {
+      this.skinStage = stage;
+      this.audio.playBuild();
+      this._spawnBuildBurst(this.kid.x + this.kid.w / 2, this.kid.y - this.kid.h / 2, 14);
+    }
+  }
+
+  _skinStageSprite(base) {
+    const tint = this._skinTint();
+    if (!tint) return base;
+    const key = this.selectedSkinId + ":" + this.skinStage;
+    if (!this.skinCache || this.skinCache.key !== key) {
+      const c = document.createElement("canvas");
+      c.width = base.width;
+      c.height = base.height;
+      const cc = c.getContext("2d");
+      cc.drawImage(base, 0, 0);
+      cc.globalCompositeOperation = "source-atop";
+      cc.fillStyle = `rgba(${tint}, 0.5)`;
+      cc.fillRect(0, 0, c.width, c.height);
+      this.skinCache = { key, canvas: c };
+    }
+    return this.skinCache.canvas;
   }
 
   _drawCombo() {
@@ -1812,8 +2181,8 @@ class Game {
     ctx.translate(drawX + drawW / 2, drawY + drawH / 2);
     if (!kid.facingRight) ctx.scale(-1, 1);
 
-    // Draw the base sprite (with a tint for flash effects).
-    const flash = this._flashedSprite(this._playerSprite(), kid);
+    // Draw the skin (auto-tinted by score stage, then a flash tint).
+    const flash = this._flashedSprite(this._skinStageSprite(this._playerSprite()), kid);
     ctx.drawImage(flash, -drawW / 2, -drawH / 2, drawW, drawH);
     ctx.restore();
   }
