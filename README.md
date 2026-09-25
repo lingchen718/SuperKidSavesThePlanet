@@ -12,8 +12,8 @@ Catch the good eco items, dodge the pollution, answer the quiz questions, and br
 - **Avoid bad items** (smoke, trash, plastic…) — they hurt the planet and cost a life.
 - **🧊 Ice cubes:** catching an ice cube **freezes Super Kid for 3 seconds** before you can move again.
 - **🛡 Shield power-up:** catch a shield to block bad items for 7 seconds.
-- **🌳 World rebuilds** as planet health climbs — a tree, a flower patch and a spinning windmill pop in at 25/50/75% (with confetti), and the smoke slowly clears.
 - **🔥 Combo system** — catch good items in a row to build a score/health multiplier (resets if a bad item hits you).
+- **🎭 Unlockable blocky skins** — tap **Skins** on the intro screen to pick a hero; new looks unlock as your best score grows.
 - **📈 Difficulty ramp:** items fall a little faster (and slightly more often) every minute.
 - **🏆 Best score** is saved in the browser (localStorage) — no account needed.
 - **Eco quizzes:** every 5 catches opens a quick quiz. Answer correctly for a big +6 health bonus.

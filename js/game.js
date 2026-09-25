@@ -45,10 +45,13 @@ const BEST_SCORE_KEY = "superKidBestScore";
 const COMBO_STEP = 5;                     // good catches per combo level
 const COMBO_MAX = 4;                      // max combo multiplier
 
-const REBUILD_MILESTONES = [
-  { at: 25, kind: "tree",     msg: "A tree has sprouted!" },
-  { at: 50, kind: "flowers",  msg: "" },
-  { at: 75, kind: "windmill", msg: "A windmill is turning!" },
+const SKIN_KEY = "superKidSkin";
+const SKINS = [
+  { id: "default", name: "Super Kid",     cost: 0 },
+  { id: "blue",    name: "Blue Explorer", cost: 40,  shirt: "#2f7de0", pants: "#1f5aa8", hair: "#6b4a2f" },
+  { id: "red",     name: "Red Ranger",    cost: 90,  shirt: "#d94f4f", pants: "#a83838", hair: "#3a2a1a" },
+  { id: "gold",    name: "Gold Champ",    cost: 160, shirt: "#f0b429", pants: "#c98a1b", hair: "#3a2a1a" },
+  { id: "purple",  name: "Purple Wizard", cost: 240, shirt: "#8e5bd9", pants: "#6b3fa8", hair: "#3a2a1a", hat: "#7a4fc9" },
 ];
 
 /* ------------------------------ Utilities ------------------------------ */
@@ -145,6 +148,7 @@ async function loadAssets() {
   await Promise.all(imagePromises);
   ASSETS.images.ice = makeIceCubeSprite();
   ASSETS.images.shield = makeShieldSprite();
+  ASSETS.skins = makeBlockySkins();
   return ASSETS;
 }
 
@@ -309,6 +313,72 @@ function makeShieldSprite() {
   }
   ctx.closePath();
   ctx.fill();
+
+  return c;
+}
+
+/* ---------------------- Blocky avatar skins (vector) -------------------- */
+
+function makeBlockySkins() {
+  const skins = {};
+  for (const skin of SKINS) {
+    if (skin.id !== "default") skins[skin.id] = makeBlockySkinSprite(skin);
+  }
+  return skins;
+}
+
+function makeBlockySkinSprite(skin) {
+  const c = document.createElement("canvas");
+  c.width = 160;
+  c.height = 160;
+  const ctx = c.getContext("2d");
+
+  function block(x, y, w, h, fill) {
+    ctx.fillStyle = fill;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "rgba(0,0,0,0.35)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, h);
+  }
+
+  const tone = "#f2c18d";
+
+  // legs
+  block(52, 116, 22, 34, skin.pants);
+  block(86, 116, 22, 34, skin.pants);
+  // body
+  block(48, 68, 64, 52, skin.shirt);
+  // arms
+  block(28, 70, 18, 46, skin.shirt);
+  block(114, 70, 18, 46, skin.shirt);
+  // hands
+  block(28, 112, 18, 8, tone);
+  block(114, 112, 18, 8, tone);
+  // head
+  block(56, 20, 48, 48, tone);
+  // hair
+  block(56, 20, 48, 12, skin.hair);
+  // eyes
+  block(66, 38, 8, 10, "#2b2b2b");
+  block(86, 38, 8, 10, "#2b2b2b");
+  // mouth
+  ctx.fillStyle = "#2b2b2b";
+  ctx.fillRect(74, 54, 12, 4);
+
+  // optional wizard hat
+  if (skin.hat) {
+    block(50, 12, 60, 8, skin.hat);
+    ctx.fillStyle = skin.hat;
+    ctx.beginPath();
+    ctx.moveTo(58, 16);
+    ctx.lineTo(80, 0);
+    ctx.lineTo(102, 16);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.35)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
 
   return c;
 }
@@ -478,27 +548,6 @@ class AudioManager {
     });
   }
 
-  /* A soft magical sparkle for world-rebuild milestones. */
-  playBuild() {
-    if (!this.unlocked || this.muted) return;
-    this.resumeCtx();
-    if (!this.ac) return;
-    const t = this.ac.currentTime;
-    const gain = this.ac.createGain();
-    gain.connect(this.ac.destination);
-    gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.16, t + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
-
-    [523, 659, 784, 1047].forEach((freq, i) => {
-      const osc = this.ac.createOscillator();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(freq, t + i * 0.06);
-      osc.connect(gain);
-      osc.start(t + i * 0.06);
-      osc.stop(t + 0.95);
-    });
-  }
 }
 
 /* ------------------------------ Game ----------------------------------- */
@@ -561,18 +610,19 @@ class Game {
       { x: 1070, y: 380 },
     ];
 
-    // World-rebuild progress
-    this.rebuildLevel = 0;
-    this.decorations = [];
-    this.rebuildMsg = "";
-    this.rebuildMsgTimer = 0;
-    this.bursts = [];
-
     // Combo
     this.combo = 0;
     this.comboMult = 1;
     this.comboPopup = "";
     this.comboPopupTimer = 0;
+
+    // Skins (cosmetic)
+    this.selectedSkinId = "default";
+    try { this.selectedSkinId = localStorage.getItem(SKIN_KEY) || "default"; } catch (e) {}
+    this.skinMenuOpen = false;
+    this.skinsButtonRect = null;
+    this.skinSlotRects = [];
+    this.skinsBackRect = null;
 
     // Best score (persisted in the browser)
     this.bestScore = 0;
@@ -668,6 +718,14 @@ class Game {
     const p = this._toLogical(e);
 
     if (this.state === STATE.INTRO) {
+      if (this.skinMenuOpen) {
+        this._handleSkinMenuTap(p);
+        return;
+      }
+      if (this.skinsButtonRect && this._hit(p, this.skinsButtonRect)) {
+        this.skinMenuOpen = true;
+        return;
+      }
       this._startGame();
       return;
     }
@@ -730,6 +788,10 @@ class Game {
     }
 
     if (this.state === STATE.INTRO) {
+      if (this.skinMenuOpen) {
+        if (k === "Escape" || k === "Backspace") this.skinMenuOpen = false;
+        return;
+      }
       if (k === "Enter" || k === " ") this._startGame();
       return;
     }
@@ -796,11 +858,6 @@ class Game {
     this.newBest = false;
     this.paused = false;
     this.ambient = [];
-    this.rebuildLevel = 0;
-    this.decorations = [];
-    this.rebuildMsg = "";
-    this.rebuildMsgTimer = 0;
-    this.bursts = [];
     this.combo = 0;
     this.comboMult = 1;
     this.comboPopup = "";
@@ -998,7 +1055,6 @@ class Game {
     // Keep the background alive on the play + game-over screens.
     if (this.state === STATE.PLAYING || this.state === STATE.GAMEOVER) {
       this._updateAmbient(dt);
-      this._updateBursts(dt);
     }
 
     if (this.state === STATE.INTRO) {
@@ -1041,8 +1097,6 @@ class Game {
       this._checkCleanMode();
     }
 
-    this._checkRebuild();
-    if (this.rebuildMsgTimer > 0) this.rebuildMsgTimer -= dt;
     if (this.comboPopupTimer > 0) this.comboPopupTimer -= dt;
     if (this.cleanMsgTimer > 0) this.cleanMsgTimer -= dt;
   }
@@ -1152,15 +1206,11 @@ class Game {
 
   _updateAmbient(dt) {
     if (this.cleanMode) {
-      // More life as the planet gets healthier (50 -> 100).
-      const life = 1 + 0.8 * clamp((this.health - CLEAN_HEALTH_THRESHOLD) / 50, 0, 1);
-      if (Math.random() < 2.5 * life * dt) this._spawnPetal();
-      if (Math.random() < 1.5 * life * dt) this._spawnSpark();
+      if (Math.random() < 2.5 * dt) this._spawnPetal();
+      if (Math.random() < 1.5 * dt) this._spawnSpark();
     } else {
-      // Smoke thins out as the planet cleans up (0 -> 50).
-      const smog = 1 - 0.75 * clamp(this.health / CLEAN_HEALTH_THRESHOLD, 0, 1);
-      if (Math.random() < 2.5 * smog * dt) this._spawnSmoke();
-      if (Math.random() < 1.6 * smog * dt) this._spawnBrownSmoke();
+      if (Math.random() < 2.5 * dt) this._spawnSmoke();
+      if (Math.random() < 1.6 * dt) this._spawnBrownSmoke();
     }
 
     for (let i = this.ambient.length - 1; i >= 0; i--) {
@@ -1370,7 +1420,10 @@ class Game {
     ctx.clearRect(0, 0, LOGICAL_W, LOGICAL_H);
 
     switch (this.state) {
-      case STATE.INTRO:    this._drawIntro(); break;
+      case STATE.INTRO:
+        this._drawIntro();
+        if (this.skinMenuOpen) this._drawSkinMenu();
+        break;
       case STATE.PLAYING:  this._drawPlaying(); break;
       case STATE.WON:      this._drawWin(); break;
       case STATE.GAMEOVER: this._drawPlaying(); this._drawGameOver(); break;
@@ -1456,6 +1509,20 @@ class Game {
     const msg = "Press ENTER or tap anywhere to Begin!";
     ctx.fillStyle = `rgba(${Math.round(160 * pulse + 60)}, ${Math.round(200 * pulse + 40)}, ${Math.round(230 * pulse + 25)}, 1)`;
     ctx.fillText(msg, LOGICAL_W / 2, LOGICAL_H * 0.9);
+
+    // Skins button (bottom-left corner)
+    const sbw = 160, sbh = 50, sbx = 34, sby = LOGICAL_H - 72;
+    this.skinsButtonRect = { x: sbx, y: sby, w: sbw, h: sbh };
+    ctx.fillStyle = "rgba(20, 30, 55, 0.82)";
+    roundedRect(ctx, sbx, sby, sbw, sbh, 12);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.5)";
+    ctx.lineWidth = 2;
+    roundedRect(ctx, sbx, sby, sbw, sbh, 12);
+    ctx.stroke();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "700 24px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillText("🎨 Skins", sbx + sbw / 2, sby + 33);
   }
 
   _drawPlaying() {
@@ -1481,10 +1548,6 @@ class Game {
     // Subtle animated layer on top of the original background
     this._drawAmbient();
 
-    // Rebuilt scenery + milestone confetti
-    this._drawDecorations();
-    this._drawBursts();
-
     // Items (with colour-coded effects so players can read them at a glance)
     for (const item of this.items) {
       this._drawItemEffects(item);
@@ -1503,9 +1566,8 @@ class Game {
     // HUD
     this._drawHud();
 
-    // Combo indicator + rebuild milestone banner
+    // Combo indicator
     this._drawCombo();
-    if (this.rebuildMsgTimer > 0) this._drawRebuildMessage();
 
     // Clean-mode unlock message
     if (this.cleanMsgTimer > 0) this._drawCleanMessage();
@@ -1588,183 +1650,6 @@ class Game {
     ctx.fill();
   }
 
-  /* ---------------- World-rebuild progress & combo helpers ---------------- */
-
-  _checkRebuild() {
-    const level = REBUILD_MILESTONES.filter((m) => this.health >= m.at).length;
-    while (this.rebuildLevel < level) {
-      this._triggerRebuild(this.rebuildLevel);
-    }
-  }
-
-  _triggerRebuild(i) {
-    const m = REBUILD_MILESTONES[i];
-    this.rebuildLevel = i + 1;
-    const x = this._rebuildX(m.kind);
-    this.decorations.push({ kind: m.kind, x, born: performance.now() });
-    if (m.msg) {
-      this.rebuildMsg = m.msg;
-      this.rebuildMsgTimer = 2.5;
-    }
-    this.audio.playBuild();
-    this._spawnBuildBurst(x, LOGICAL_H - 70);
-  }
-
-  _rebuildX(kind) {
-    const spots = { tree: 150, flowers: 900, windmill: 450 };
-    return (spots[kind] || 500) + rand(-24, 24);
-  }
-
-  _spawnBuildBurst(x, y) {
-    const colors = ["#64ff78", "#b4ff64", "#ffd66b", "#50c8ff", "#ffb3c6"];
-    for (let i = 0; i < 26; i++) {
-      this.bursts.push({
-        x, y,
-        vx: rand(-170, 170),
-        vy: rand(-280, -60),
-        size: rand(4, 9),
-        color: pick(colors),
-        rot: rand(0, Math.PI * 2),
-        spin: rand(-7, 7),
-        shape: Math.random() < 0.5 ? "circle" : "rect",
-        age: 0,
-        life: rand(0.8, 1.4),
-      });
-    }
-  }
-
-  _updateBursts(dt) {
-    for (let i = this.bursts.length - 1; i >= 0; i--) {
-      const p = this.bursts[i];
-      p.age += dt;
-      p.vy += 620 * dt;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.rot += p.spin * dt;
-      if (p.age >= p.life) this.bursts.splice(i, 1);
-    }
-  }
-
-  _drawBursts() {
-    const ctx = this.ctx;
-    for (const p of this.bursts) {
-      ctx.save();
-      ctx.globalAlpha = clamp(1 - p.age / p.life, 0, 1);
-      ctx.translate(p.x, p.y);
-      ctx.rotate(p.rot);
-      ctx.fillStyle = p.color;
-      if (p.shape === "rect") {
-        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
-      } else {
-        ctx.beginPath();
-        ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
-    }
-  }
-
-  /* Pop-in scale with a bouncy ease for rebuilt scenery. */
-  _popScale(t) {
-    if (t <= 0) return 0;
-    if (t >= 1) return 1;
-    const c1 = 1.70158, c3 = c1 + 1;
-    return clamp(1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2), 0, 1.2);
-  }
-
-  _drawDecorations() {
-    const ctx = this.ctx;
-    const y = LOGICAL_H - 26;
-    const t = performance.now() / 1000;
-    for (const d of this.decorations) {
-      const s = this._popScale((performance.now() - d.born) / 400);
-      if (d.kind === "tree") this._drawTree(ctx, d.x, y, s);
-      else if (d.kind === "flowers") this._drawFlowers(ctx, d.x, y, s);
-      else if (d.kind === "windmill") this._drawWindmill(ctx, d.x, y, s, t);
-    }
-  }
-
-  _drawTree(ctx, x, y, s) {
-    ctx.fillStyle = "#6b4a2f";
-    ctx.fillRect(x - 6 * s, y - 46 * s, 12 * s, 46 * s);
-    ctx.fillStyle = "#4caf50";
-    ctx.beginPath(); ctx.arc(x, y - 60 * s, 22 * s, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#66bb6a";
-    ctx.beginPath(); ctx.arc(x - 16 * s, y - 44 * s, 15 * s, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(x + 16 * s, y - 44 * s, 15 * s, 0, Math.PI * 2); ctx.fill();
-  }
-
-  _drawFlowers(ctx, x, y, s) {
-    const colors = ["#ff8fa3", "#ffd66b", "#ffffff", "#ff9ecb", "#b9f27a"];
-    ctx.lineWidth = 2;
-    for (let i = 0; i < 5; i++) {
-      const fx = x + (i - 2) * 20 * s;
-      const fy = y - (7 + (i % 3) * 5) * s;
-      ctx.strokeStyle = "#3d8b40";
-      ctx.beginPath(); ctx.moveTo(fx, y); ctx.lineTo(fx, fy); ctx.stroke();
-      ctx.fillStyle = colors[i % colors.length];
-      ctx.beginPath(); ctx.arc(fx, fy, 5 * s, 0, Math.PI * 2); ctx.fill();
-    }
-  }
-
-  _drawWindmill(ctx, x, y, s, t) {
-    // tower
-    ctx.fillStyle = "#e8dcc0";
-    ctx.beginPath();
-    ctx.moveTo(x - 14 * s, y);
-    ctx.lineTo(x - 8 * s, y - 70 * s);
-    ctx.lineTo(x + 8 * s, y - 70 * s);
-    ctx.lineTo(x + 14 * s, y);
-    ctx.closePath();
-    ctx.fill();
-    // roof
-    ctx.fillStyle = "#c0392b";
-    ctx.beginPath();
-    ctx.moveTo(x - 10 * s, y - 70 * s);
-    ctx.lineTo(x, y - 88 * s);
-    ctx.lineTo(x + 10 * s, y - 70 * s);
-    ctx.closePath();
-    ctx.fill();
-    // rotating blades
-    ctx.save();
-    ctx.translate(x, y - 78 * s);
-    ctx.rotate(t * 2.2);
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 3 * s;
-    ctx.lineCap = "round";
-    for (let k = 0; k < 3; k++) {
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(0, -30 * s);
-      ctx.stroke();
-      ctx.rotate((Math.PI * 2) / 3);
-    }
-    ctx.restore();
-  }
-
-  _drawRebuildMessage() {
-    if (this.rebuildMsgTimer <= 0) return;
-    const ctx = this.ctx;
-    const alpha = clamp(this.rebuildMsgTimer / 0.4, 0, 1);
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.textAlign = "center";
-    ctx.font = "700 30px 'Comic Neue', 'Comic Sans MS', sans-serif";
-    const msg = this.rebuildMsg;
-    const tw = ctx.measureText(msg).width;
-    const y = 148;
-    ctx.fillStyle = "rgba(20, 90, 30, 0.85)";
-    roundedRect(ctx, LOGICAL_W / 2 - tw / 2 - 22, y - 30, tw + 44, 52, 14);
-    ctx.fill();
-    ctx.strokeStyle = "#b4ff64";
-    ctx.lineWidth = 2.5;
-    roundedRect(ctx, LOGICAL_W / 2 - tw / 2 - 22, y - 30, tw + 44, 52, 14);
-    ctx.stroke();
-    ctx.fillStyle = "#d9ffd9";
-    ctx.fillText(msg, LOGICAL_W / 2, y + 4);
-    ctx.restore();
-  }
-
   _drawCombo() {
     const ctx = this.ctx;
 
@@ -1798,6 +1683,107 @@ class Game {
     }
   }
 
+  /* ----------------------------- Skins ---------------------------------- */
+
+  _playerSprite() {
+    return this._skinSprite(this.selectedSkinId);
+  }
+
+  _skinSprite(id) {
+    if (id === "default") return ASSETS.images.player;
+    return (ASSETS.skins && ASSETS.skins[id]) || ASSETS.images.player;
+  }
+
+  _handleSkinMenuTap(p) {
+    if (this.skinsBackRect && this._hit(p, this.skinsBackRect)) {
+      this.skinMenuOpen = false;
+      return;
+    }
+    for (let i = 0; i < this.skinSlotRects.length; i++) {
+      if (this._hit(p, this.skinSlotRects[i])) {
+        const skin = SKINS[i];
+        if (skin.cost === 0 || this.bestScore >= skin.cost) {
+          this.selectedSkinId = skin.id;
+          try { localStorage.setItem(SKIN_KEY, skin.id); } catch (e) {}
+        }
+        return;
+      }
+    }
+  }
+
+  _drawSkinMenu() {
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(5, 8, 18, 0.82)";
+    ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+
+    ctx.textAlign = "center";
+    ctx.font = "700 40px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText("CHOOSE YOUR HERO", LOGICAL_W / 2, 68);
+
+    ctx.font = "700 24px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillStyle = "#ffd66b";
+    ctx.fillText("Best Score: " + this.bestScore, LOGICAL_W / 2, 104);
+
+    const slotW = 170, slotH = 210, gap = 14;
+    const totalW = SKINS.length * slotW + (SKINS.length - 1) * gap;
+    let sx = (LOGICAL_W - totalW) / 2;
+    const sy = 136;
+    this.skinSlotRects = [];
+
+    SKINS.forEach((skin) => {
+      const rect = { x: sx, y: sy, w: slotW, h: slotH };
+      this.skinSlotRects.push(rect);
+      const unlocked = skin.cost === 0 || this.bestScore >= skin.cost;
+      const selected = this.selectedSkinId === skin.id;
+
+      ctx.fillStyle = selected ? "rgba(60, 150, 70, 0.92)" : "rgba(20, 28, 48, 0.92)";
+      roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 16);
+      ctx.fill();
+      ctx.strokeStyle = selected ? "#b4ff64" : (unlocked ? "#ffffff" : "#3a4560");
+      ctx.lineWidth = selected ? 4 : 2.5;
+      roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 16);
+      ctx.stroke();
+
+      const icon = this._skinSprite(skin.id);
+      const iw = 92, ih = 92;
+      ctx.drawImage(icon, rect.x + (slotW - iw) / 2, rect.y + 16, iw, ih);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "700 19px 'Comic Neue', 'Comic Sans MS', sans-serif";
+      ctx.fillText(skin.name, rect.x + slotW / 2, rect.y + 138);
+
+      ctx.font = "400 17px 'Comic Neue', 'Comic Sans MS', sans-serif";
+      if (selected) {
+        ctx.fillStyle = "#b4ff64";
+        ctx.fillText("SELECTED", rect.x + slotW / 2, rect.y + 166);
+      } else if (unlocked) {
+        ctx.fillStyle = "#ffd66b";
+        ctx.fillText("TAP TO EQUIP", rect.x + slotW / 2, rect.y + 166);
+      } else {
+        ctx.fillStyle = "#9aa6c0";
+        ctx.fillText("🔒 Score " + skin.cost, rect.x + slotW / 2, rect.y + 166);
+      }
+
+      sx += slotW + gap;
+    });
+
+    // Back button
+    const bw = 220, bh = 56;
+    const bx = (LOGICAL_W - bw) / 2, by = 372;
+    this.skinsBackRect = { x: bx, y: by, w: bw, h: bh };
+    ctx.fillStyle = "rgba(40, 60, 100, 0.9)";
+    roundedRect(ctx, bx, by, bw, bh, 14);
+    ctx.fill();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2.5;
+    roundedRect(ctx, bx, by, bw, bh, 14);
+    ctx.stroke();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "700 26px 'Comic Neue', 'Comic Sans MS', sans-serif";
+    ctx.fillText("Back", LOGICAL_W / 2, by + 38);
+  }
+
   _drawKid() {
     const ctx = this.ctx;
     const kid = this.kid;
@@ -1827,7 +1813,7 @@ class Game {
     if (!kid.facingRight) ctx.scale(-1, 1);
 
     // Draw the base sprite (with a tint for flash effects).
-    const flash = this._flashedSprite(ASSETS.images.player, kid);
+    const flash = this._flashedSprite(this._playerSprite(), kid);
     ctx.drawImage(flash, -drawW / 2, -drawH / 2, drawW, drawH);
     ctx.restore();
   }
