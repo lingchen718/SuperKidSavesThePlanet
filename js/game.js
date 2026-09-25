@@ -47,29 +47,17 @@ const COMBO_MAX = 4;                      // max combo multiplier
 
 const SKIN_KEY = "superKidSkin";
 const SKINS = [
-  { id: "default", name: "Super Kid",     cost: 0 },
-  { id: "blue",    name: "Blue Explorer", cost: 40,  shirt: "#2f7de0", pants: "#1f5aa8", hair: "#6b4a2f" },
-  { id: "red",     name: "Red Ranger",    cost: 90,  shirt: "#d94f4f", pants: "#a83838", hair: "#3a2a1a" },
-  { id: "gold",    name: "Gold Champ",    cost: 160, shirt: "#f0b429", pants: "#c98a1b", hair: "#3a2a1a" },
-  { id: "purple",  name: "Purple Wizard", cost: 240, shirt: "#8e5bd9", pants: "#6b3fa8", hair: "#3a2a1a", hat: "#7a4fc9" },
+  { id: "default", name: "Super Kid", cost: 0,   tint: null },
+  { id: "green",   name: "Green Kid", cost: 40,  tint: "120,255,120" },
+  { id: "blue",    name: "Blue Kid",  cost: 90,  tint: "90,180,255" },
+  { id: "red",     name: "Red Kid",   cost: 160, tint: "255,95,95" },
+  { id: "gold",    name: "Gold Kid",  cost: 240, tint: "255,205,90" },
 ];
 
-// World-rebuild schedule (blocky, Minecraft-style scenery)
-const REBUILD_TREE_START = 20;      // first tree at 20% planet health
-const REBUILD_TREE_STEP = 3;        // then a new tree every +3%
-const REBUILD_TREE_MAX = 10;        // max trees
-const REBUILD_BEE_START = 50;       // bees appear at 50%
-const REBUILD_BEE_STEP = 5;         // more bees / butterflies every +5%
-const REBUILD_CREATURE_MAX = 10;    // max flying creatures
-const REBUILD_WINDMILL_AT = 75;     // windmill at 75%
-
-// Score-stage skin tint (basic auto look-up as points climb)
-const SKIN_STAGES = [
-  { at: 0,   tint: null },
-  { at: 20,  tint: "140,255,140" },   // eco green
-  { at: 50,  tint: "110,190,255" },   // sky blue
-  { at: 100, tint: "255,205,90" },    // golden
-];
+// Monsters wandering the polluted world (blocky, Minecraft-style)
+const MONSTER_START = 15;         // monsters at the start
+const MONSTER_FADE_START = 20;    // they start leaving at 20% health
+const MONSTER_FADE_STEP = 2;      // one leaves every +2% health
 
 /* ------------------------------ Utilities ------------------------------ */
 
@@ -165,7 +153,6 @@ async function loadAssets() {
   await Promise.all(imagePromises);
   ASSETS.images.ice = makeIceCubeSprite();
   ASSETS.images.shield = makeShieldSprite();
-  ASSETS.skins = makeBlockySkins();
   return ASSETS;
 }
 
@@ -330,72 +317,6 @@ function makeShieldSprite() {
   }
   ctx.closePath();
   ctx.fill();
-
-  return c;
-}
-
-/* ---------------------- Blocky avatar skins (vector) -------------------- */
-
-function makeBlockySkins() {
-  const skins = {};
-  for (const skin of SKINS) {
-    if (skin.id !== "default") skins[skin.id] = makeBlockySkinSprite(skin);
-  }
-  return skins;
-}
-
-function makeBlockySkinSprite(skin) {
-  const c = document.createElement("canvas");
-  c.width = 160;
-  c.height = 160;
-  const ctx = c.getContext("2d");
-
-  function block(x, y, w, h, fill) {
-    ctx.fillStyle = fill;
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = "rgba(0,0,0,0.35)";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x, y, w, h);
-  }
-
-  const tone = "#f2c18d";
-
-  // legs
-  block(52, 116, 22, 34, skin.pants);
-  block(86, 116, 22, 34, skin.pants);
-  // body
-  block(48, 68, 64, 52, skin.shirt);
-  // arms
-  block(28, 70, 18, 46, skin.shirt);
-  block(114, 70, 18, 46, skin.shirt);
-  // hands
-  block(28, 112, 18, 8, tone);
-  block(114, 112, 18, 8, tone);
-  // head
-  block(56, 20, 48, 48, tone);
-  // hair
-  block(56, 20, 48, 12, skin.hair);
-  // eyes
-  block(66, 38, 8, 10, "#2b2b2b");
-  block(86, 38, 8, 10, "#2b2b2b");
-  // mouth
-  ctx.fillStyle = "#2b2b2b";
-  ctx.fillRect(74, 54, 12, 4);
-
-  // optional wizard hat
-  if (skin.hat) {
-    block(50, 12, 60, 8, skin.hat);
-    ctx.fillStyle = skin.hat;
-    ctx.beginPath();
-    ctx.moveTo(58, 16);
-    ctx.lineTo(80, 0);
-    ctx.lineTo(102, 16);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.35)";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-  }
 
   return c;
 }
@@ -587,6 +508,27 @@ class AudioManager {
     });
   }
 
+  /* A soft blip when a monster vanishes. */
+  playPoof() {
+    if (!this.unlocked || this.muted) return;
+    this.resumeCtx();
+    if (!this.ac) return;
+    const t = this.ac.currentTime;
+    const gain = this.ac.createGain();
+    gain.connect(this.ac.destination);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.12, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+
+    const osc = this.ac.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(320, t);
+    osc.frequency.exponentialRampToValueAtTime(120, t + 0.22);
+    osc.connect(gain);
+    osc.start(t);
+    osc.stop(t + 0.25);
+  }
+
 }
 
 /* ------------------------------ Game ----------------------------------- */
@@ -655,17 +597,12 @@ class Game {
     this.comboPopup = "";
     this.comboPopupTimer = 0;
 
-    // World-rebuild progress
-    this.trees = [];            // blocky trees (static ground scenery)
-    this.creatures = [];        // bees + butterflies (flying)
-    this.windmill = null;       // { x, born }
-    this.rebuildMsg = "";
-    this.rebuildMsgTimer = 0;
-    this.bursts = [];           // confetti bursts for rebuild pop-ins
+    // Polluted-world monsters (they disappear as the world heals)
+    this.monsters = [];
+    this.bursts = [];           // poof particles
 
-    // Score-stage skin tint
-    this.skinStage = 0;
-    this.skinCache = null;
+    // Cache for recoloured Super Kid looks
+    this._skinTintCache = null;
 
     // Skins (cosmetic)
     this.selectedSkinId = "default";
@@ -913,13 +850,9 @@ class Game {
     this.comboMult = 1;
     this.comboPopup = "";
     this.comboPopupTimer = 0;
-    this.trees = [];
-    this.creatures = [];
-    this.windmill = null;
-    this.rebuildMsg = "";
-    this.rebuildMsgTimer = 0;
+    this.monsters = [];
     this.bursts = [];
-    this.skinStage = 0;
+    this._spawnMonsters();
     this._syncPauseButton();
     this._resetPlayerPosition();
     this.audio.playMusic("polluted");
@@ -1114,7 +1047,7 @@ class Game {
     if (this.state === STATE.PLAYING || this.state === STATE.GAMEOVER) {
       this._updateAmbient(dt);
       this._updateBursts(dt);
-      this._updateCreatures(dt);
+      this._updateMonsters(dt);
     }
 
     if (this.state === STATE.INTRO) {
@@ -1157,9 +1090,7 @@ class Game {
       this._checkCleanMode();
     }
 
-    this._checkRebuild();
-    this._checkSkin();
-    if (this.rebuildMsgTimer > 0) this.rebuildMsgTimer -= dt;
+    this._checkMonsters();
     if (this.comboPopupTimer > 0) this.comboPopupTimer -= dt;
     if (this.cleanMsgTimer > 0) this.cleanMsgTimer -= dt;
   }
@@ -1615,9 +1546,8 @@ class Game {
     // Subtle animated layer on top of the original background
     this._drawAmbient();
 
-    // Rebuilt scenery + flying creatures + milestone confetti
-    this._drawDecorations();
-    this._drawCreatures();
+    // Wandering monsters + poof particles
+    this._drawMonsters();
     this._drawBursts();
 
     // Items (with colour-coded effects so players can read them at a glance)
@@ -1640,9 +1570,6 @@ class Game {
 
     // Combo indicator
     this._drawCombo();
-
-    // Rebuild milestone banner
-    if (this.rebuildMsgTimer > 0) this._drawRebuildMessage();
 
     // Clean-mode unlock message
     if (this.cleanMsgTimer > 0) this._drawCleanMessage();
@@ -1725,71 +1652,54 @@ class Game {
     ctx.fill();
   }
 
-  /* ------------- World-rebuild progress (blocky, Minecraft-style) ------------- */
+  /* ---------------- Polluted-world monsters (blocky, Minecraft-style) ---------------- */
 
-  _checkRebuild() {
-    // Trees: first at 20%, then one more every +3% (capped).
-    const targetTrees = this.health >= REBUILD_TREE_START
-      ? Math.min(REBUILD_TREE_MAX, 1 + Math.floor((this.health - REBUILD_TREE_START) / REBUILD_TREE_STEP))
-      : 0;
-    while (this.trees.length < targetTrees) this._addTree();
-
-    // Bees / butterflies: first at 50%, then one more every +5%.
-    const targetCreatures = this.health >= REBUILD_BEE_START
-      ? Math.min(REBUILD_CREATURE_MAX, 1 + Math.floor((this.health - REBUILD_BEE_START) / REBUILD_BEE_STEP))
-      : 0;
-    while (this.creatures.length < targetCreatures) this._addCreature();
-
-    // Windmill at 75%.
-    if (this.health >= REBUILD_WINDMILL_AT && !this.windmill) this._addWindmill();
-  }
-
-  _addTree() {
-    const x = 70 + this.trees.length * 105 + rand(-12, 12);
-    this.trees.push({ x, born: performance.now() });
-    this._spawnBuildBurst(x, LOGICAL_H - 46, 10);
-    if (this.trees.length === 1) {
-      this.rebuildMsg = "A tree is growing!";
-      this.rebuildMsgTimer = 2.2;
-      this.audio.playBuild();
+  _spawnMonsters() {
+    this.monsters = [];
+    const kinds = ["creeper", "zombie", "ghast", "piglin"];
+    for (let i = 0; i < MONSTER_START; i++) {
+      const kind = pick(kinds);
+      this.monsters.push({
+        kind,
+        x: rand(50, LOGICAL_W - 50),
+        y: kind === "ghast" ? rand(160, 380) : LOGICAL_H - 26,
+        vx: (Math.random() < 0.5 ? -1 : 1) * rand(14, 30),
+        phase: rand(0, Math.PI * 2),
+      });
     }
   }
 
-  _addCreature() {
-    const kind = this.creatures.length === 0 ? "bee" : (Math.random() < 0.5 ? "bee" : "butterfly");
-    this.creatures.push({
-      kind,
-      x: rand(80, LOGICAL_W - 80),
-      y: rand(140, 520),
-      vx: (Math.random() < 0.5 ? -1 : 1) * rand(24, 46),
-      phase: rand(0, Math.PI * 2),
-      born: performance.now(),
-    });
-    if (this.creatures.length === 1) this.audio.playBuild();
+  _checkMonsters() {
+    const target = this._targetMonsterCount();
+    while (this.monsters.length > target) {
+      const idx = Math.floor(Math.random() * this.monsters.length);
+      const m = this.monsters[idx];
+      this.monsters.splice(idx, 1);
+      this._spawnPoof(m.x, m.y);
+      this.audio.playPoof();
+    }
   }
 
-  _addWindmill() {
-    this.windmill = { x: 1080, born: performance.now() };
-    this.rebuildMsg = "A windmill is turning!";
-    this.rebuildMsgTimer = 2.5;
-    this.audio.playBuild();
-    this._spawnBuildBurst(1080, LOGICAL_H - 70, 24);
+  _targetMonsterCount() {
+    if (this.health < MONSTER_FADE_START) return MONSTER_START;
+    const removed = Math.min(MONSTER_START, 1 + Math.floor((this.health - MONSTER_FADE_START) / MONSTER_FADE_STEP));
+    return MONSTER_START - removed;
   }
 
-  _spawnBuildBurst(x, y, count = 20) {
-    const colors = ["#64ff78", "#b4ff64", "#ffd66b", "#50c8ff", "#ffb3c6"];
-    for (let i = 0; i < count; i++) {
+  _spawnPoof(x, y) {
+    for (let i = 0; i < 10; i++) {
       this.bursts.push({
-        x, y,
-        vx: rand(-170, 170),
-        vy: rand(-280, -60),
+        x: x + rand(-14, 14),
+        y: y + rand(-12, 12),
+        vx: rand(-55, 55),
+        vy: rand(-80, -20),
         size: rand(4, 9),
-        color: pick(colors),
+        color: pick(["#d7d3d6", "#b9b5ba", "#ffffff"]),
         rot: rand(0, Math.PI * 2),
-        spin: rand(-7, 7),
-        shape: Math.random() < 0.5 ? "circle" : "rect",
+        spin: rand(-6, 6),
+        shape: "circle",
         age: 0,
-        life: rand(0.8, 1.4),
+        life: rand(0.5, 0.9),
       });
     }
   }
@@ -1841,182 +1751,60 @@ class Game {
     }
   }
 
-  /* Bouncy pop-in scale for rebuilt scenery. */
-  _popScale(t) {
-    if (t <= 0) return 0;
-    if (t >= 1) return 1;
-    const c1 = 1.70158, c3 = c1 + 1;
-    return clamp(1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2), 0, 1.2);
+  _updateMonsters(dt) {
+    for (const m of this.monsters) {
+      m.x += m.vx * dt;
+      if (m.x < 30) { m.x = 30; m.vx = Math.abs(m.vx); }
+      if (m.x > LOGICAL_W - 30) { m.x = LOGICAL_W - 30; m.vx = -Math.abs(m.vx); }
+    }
   }
 
-  _drawDecorations() {
+  _drawMonsters() {
     const ctx = this.ctx;
-    const y = LOGICAL_H - 26;
     const t = performance.now() / 1000;
-    for (const tr of this.trees) {
-      const s = this._popScale((performance.now() - tr.born) / 400);
-      this._drawTree(ctx, tr.x, y, s);
-    }
-    if (this.windmill) {
-      const s = this._popScale((performance.now() - this.windmill.born) / 400);
-      this._drawWindmill(ctx, this.windmill.x, y, s, t);
+    for (const m of this.monsters) {
+      const bob = m.kind === "ghast" ? Math.sin(t * 1.6 + m.phase) * 14 : Math.sin(t * 4 + m.phase) * 3;
+      this._drawMonster(ctx, m.kind, m.x, m.y + bob, 1);
     }
   }
 
-  _drawTree(ctx, x, y, s) {
-    const px = 11;
-    const rows = [
-      "HGGGG",
-      "GGGGG",
-      "GDDDG",
-      ".TTT.",
-      ".TTT.",
-    ];
-    const palette = { H: "#5ab05a", G: "#3e8f3e", D: "#2f6e2f", T: "#6d4c2f" };
+  _drawMonster(ctx, kind, x, y, s) {
+    if (kind === "creeper") this._drawCreeper(ctx, x, y, s);
+    else if (kind === "zombie") this._drawZombie(ctx, x, y, s);
+    else if (kind === "ghast") this._drawGhast(ctx, x, y, s);
+    else this._drawPiglin(ctx, x, y, s);
+  }
+
+  _drawCreeper(ctx, x, y, s) {
+    const px = 9;
+    const rows = ["GGGGGG","GGGGGG","GGGGGG","GFFFFG","GFFFFG","GGGGGG","GGGGGG","GGGGGG"];
+    const palette = { G: "#5f9e4f", F: "#1b1b1b" };
     const w = rows[0].length, h = rows.length;
     this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - h * px * s, px, s);
   }
 
-  _drawWindmill(ctx, x, y, s, t) {
-    const px = 11;
-    const rows = [
-      "..R..",
-      ".RRR.",
-      "TTTTT",
-      "TWTWT",
-      "TTTTT",
-      ".TTT.",
-      ".TTT.",
-    ];
-    const palette = { R: "#c0392b", T: "#e8dcc0", W: "#7fb3d5" };
+  _drawZombie(ctx, x, y, s) {
+    const px = 8;
+    const rows = ["HHHHHH","SSSSSS","SSSSSS","BBBBBB","BBBBBB","BBBBBB","PPPPPP","PPPPPP","PPPPPP"];
+    const palette = { H: "#3b3b3b", S: "#6a8f5a", B: "#3f7fb5", P: "#3a3f45" };
     const w = rows[0].length, h = rows.length;
-    const ox = x - (w * px * s) / 2;
-    const oy = y - h * px * s;
-    this._drawPattern(ctx, rows, palette, ox, oy, px, s);
-
-    // Rotating blades at the top of the tower.
-    const hubX = x, hubY = oy + px * 1.6 * s;
-    const bladeLen = 30 * s, bladeW = 6 * s;
-    ctx.save();
-    ctx.translate(hubX, hubY);
-    ctx.rotate(t * 1.6);
-    ctx.fillStyle = "#f5f0e0";
-    for (let k = 0; k < 4; k++) {
-      ctx.save();
-      ctx.rotate((k * Math.PI) / 2);
-      ctx.fillRect(-bladeW / 2, -bladeLen, bladeW, bladeLen);
-      ctx.restore();
-    }
-    ctx.fillStyle = "#8b7a55";
-    ctx.fillRect(-5 * s, -5 * s, 10 * s, 10 * s);
-    ctx.restore();
+    this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - h * px * s, px, s);
   }
 
-  _updateCreatures(dt) {
-    for (const c of this.creatures) {
-      c.x += c.vx * dt;
-      if (c.x < 30) { c.x = 30; c.vx = Math.abs(c.vx); }
-      if (c.x > LOGICAL_W - 30) { c.x = LOGICAL_W - 30; c.vx = -Math.abs(c.vx); }
-    }
-  }
-
-  _drawCreatures() {
-    const ctx = this.ctx;
-    const t = performance.now() / 1000;
-    for (const c of this.creatures) {
-      const s = this._popScale((performance.now() - c.born) / 400);
-      const y = c.y + Math.sin(t * 2 + c.phase) * 18;
-      if (c.kind === "bee") this._drawBee(ctx, c.x, y, s);
-      else this._drawButterfly(ctx, c.x, y, s);
-    }
-  }
-
-  _drawBee(ctx, x, y, s) {
-    const px = 7;
-    const rows = [
-      ".WW.",
-      "BBYY",
-      "YYBB",
-      "BBYY",
-    ];
-    const palette = { W: "rgba(234,246,255,0.92)", B: "#2b2b2b", Y: "#f5c542" };
+  _drawGhast(ctx, x, y, s) {
+    const px = 10;
+    const rows = ["WWWWW","WWWWW","WFFFW","WWWWW","WWWWW"];
+    const palette = { W: "#f2f2f2", F: "#1b1b1b" };
     const w = rows[0].length, h = rows.length;
     this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - (h * px * s) / 2, px, s);
   }
 
-  _drawButterfly(ctx, x, y, s) {
-    const px = 7;
-    const rows = [
-      "P....P",
-      "PPBBPP",
-      ".PBBP.",
-    ];
-    const palette = { P: "#ff8fa3", B: "#4a2c1a" };
+  _drawPiglin(ctx, x, y, s) {
+    const px = 8;
+    const rows = ["PPPPPP","PPPPPP","PPPPPP","GGGGGG","GGGGGG","PPPPPP","PPPPPP"];
+    const palette = { P: "#e8a0a0", G: "#f0b429" };
     const w = rows[0].length, h = rows.length;
-    this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - (h * px * s) / 2, px, s);
-  }
-
-  _drawRebuildMessage() {
-    if (this.rebuildMsgTimer <= 0) return;
-    const ctx = this.ctx;
-    const alpha = clamp(this.rebuildMsgTimer / 0.4, 0, 1);
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.textAlign = "center";
-    ctx.font = "700 30px 'Comic Neue', 'Comic Sans MS', sans-serif";
-    const msg = this.rebuildMsg;
-    const tw = ctx.measureText(msg).width;
-    const y = 148;
-    ctx.fillStyle = "rgba(20, 90, 30, 0.85)";
-    roundedRect(ctx, LOGICAL_W / 2 - tw / 2 - 22, y - 30, tw + 44, 52, 14);
-    ctx.fill();
-    ctx.strokeStyle = "#b4ff64";
-    ctx.lineWidth = 2.5;
-    roundedRect(ctx, LOGICAL_W / 2 - tw / 2 - 22, y - 30, tw + 44, 52, 14);
-    ctx.stroke();
-    ctx.fillStyle = "#d9ffd9";
-    ctx.fillText(msg, LOGICAL_W / 2, y + 4);
-    ctx.restore();
-  }
-
-  /* ----------------- Score-stage skin tint (basic auto look-up) ----------------- */
-
-  _skinTint() {
-    let tint = null;
-    for (const st of SKIN_STAGES) {
-      if (this.score >= st.at) tint = st.tint;
-    }
-    return tint;
-  }
-
-  _checkSkin() {
-    let stage = 0;
-    for (let i = 0; i < SKIN_STAGES.length; i++) {
-      if (this.score >= SKIN_STAGES[i].at) stage = i;
-    }
-    if (stage > this.skinStage) {
-      this.skinStage = stage;
-      this.audio.playBuild();
-      this._spawnBuildBurst(this.kid.x + this.kid.w / 2, this.kid.y - this.kid.h / 2, 14);
-    }
-  }
-
-  _skinStageSprite(base) {
-    const tint = this._skinTint();
-    if (!tint) return base;
-    const key = this.selectedSkinId + ":" + this.skinStage;
-    if (!this.skinCache || this.skinCache.key !== key) {
-      const c = document.createElement("canvas");
-      c.width = base.width;
-      c.height = base.height;
-      const cc = c.getContext("2d");
-      cc.drawImage(base, 0, 0);
-      cc.globalCompositeOperation = "source-atop";
-      cc.fillStyle = `rgba(${tint}, 0.5)`;
-      cc.fillRect(0, 0, c.width, c.height);
-      this.skinCache = { key, canvas: c };
-    }
-    return this.skinCache.canvas;
+    this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - h * px * s, px, s);
   }
 
   _drawCombo() {
@@ -2060,7 +1848,21 @@ class Game {
 
   _skinSprite(id) {
     if (id === "default") return ASSETS.images.player;
-    return (ASSETS.skins && ASSETS.skins[id]) || ASSETS.images.player;
+    const skin = SKINS.find((s) => s.id === id);
+    if (!skin || !skin.tint) return ASSETS.images.player;
+    if (!this._skinTintCache || this._skinTintCache.id !== id) {
+      const base = ASSETS.images.player;
+      const c = document.createElement("canvas");
+      c.width = base.width;
+      c.height = base.height;
+      const cc = c.getContext("2d");
+      cc.drawImage(base, 0, 0);
+      cc.globalCompositeOperation = "source-atop";
+      cc.fillStyle = `rgba(${skin.tint}, 0.55)`;
+      cc.fillRect(0, 0, c.width, c.height);
+      this._skinTintCache = { id, canvas: c };
+    }
+    return this._skinTintCache.canvas;
   }
 
   _handleSkinMenuTap(p) {
@@ -2181,8 +1983,8 @@ class Game {
     ctx.translate(drawX + drawW / 2, drawY + drawH / 2);
     if (!kid.facingRight) ctx.scale(-1, 1);
 
-    // Draw the skin (auto-tinted by score stage, then a flash tint).
-    const flash = this._flashedSprite(this._skinStageSprite(this._playerSprite()), kid);
+    // Draw the selected skin (with a tint for flash effects).
+    const flash = this._flashedSprite(this._playerSprite(), kid);
     ctx.drawImage(flash, -drawW / 2, -drawH / 2, drawW, drawH);
     ctx.restore();
   }
