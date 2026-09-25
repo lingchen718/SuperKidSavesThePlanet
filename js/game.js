@@ -47,17 +47,29 @@ const COMBO_MAX = 4;                      // max combo multiplier
 
 const SKIN_KEY = "superKidSkin";
 const SKINS = [
-  { id: "default", name: "Super Kid", cost: 0,   tint: null },
-  { id: "green",   name: "Green Kid", cost: 40,  tint: "120,255,120" },
-  { id: "blue",    name: "Blue Kid",  cost: 90,  tint: "90,180,255" },
-  { id: "red",     name: "Red Kid",   cost: 160, tint: "255,95,95" },
-  { id: "gold",    name: "Gold Kid",  cost: 240, tint: "255,205,90" },
+  { id: "default", name: "Super Kid", cost: 0,   aura: null },
+  { id: "green",   name: "Green Kid", cost: 40,  aura: "110,230,110" },
+  { id: "blue",    name: "Blue Kid",  cost: 90,  aura: "90,180,255" },
+  { id: "red",     name: "Red Kid",   cost: 160, aura: "255,100,100" },
+  { id: "gold",    name: "Gold Kid",  cost: 240, aura: "255,210,80", shiny: true },
 ];
 
-// Monsters wandering the polluted world (blocky, Minecraft-style)
-const MONSTER_START = 15;         // monsters at the start
-const MONSTER_FADE_START = 20;    // they start leaving at 20% health
-const MONSTER_FADE_STEP = 2;      // one leaves every +2% health
+// Factories polluting the world (blocky, disappear as the world heals)
+const FACTORY_START = 15;         // factories at the start
+const FACTORY_FADE_START = 20;    // they start closing at 20% health
+const FACTORY_FADE_STEP = 2;      // one closes every +2% health
+const FACTORY_PX = 8;
+const FACTORY_ROWS = [
+  ".C..C.",
+  ".C..C.",
+  ".C..C.",
+  "RRRRRR",
+  "BBBBBB",
+  "BWWBWW",
+  "BBBBBB",
+  "BBBBBB",
+];
+const FACTORY_PALETTE = { C: "#4a4a52", R: "#6b5d4a", B: "#8a6a4a", W: "#ffd66b" };
 
 /* ------------------------------ Utilities ------------------------------ */
 
@@ -508,7 +520,7 @@ class AudioManager {
     });
   }
 
-  /* A soft blip when a monster vanishes. */
+  /* A soft blip when a factory closes. */
   playPoof() {
     if (!this.unlocked || this.muted) return;
     this.resumeCtx();
@@ -597,12 +609,9 @@ class Game {
     this.comboPopup = "";
     this.comboPopupTimer = 0;
 
-    // Polluted-world monsters (they disappear as the world heals)
-    this.monsters = [];
+    // Factories polluting the world (they disappear as the world heals)
+    this.factories = [];
     this.bursts = [];           // poof particles
-
-    // Cache for recoloured Super Kid looks
-    this._skinTintCache = null;
 
     // Skins (cosmetic)
     this.selectedSkinId = "default";
@@ -850,9 +859,9 @@ class Game {
     this.comboMult = 1;
     this.comboPopup = "";
     this.comboPopupTimer = 0;
-    this.monsters = [];
+    this.factories = [];
     this.bursts = [];
-    this._spawnMonsters();
+    this._spawnFactories();
     this._syncPauseButton();
     this._resetPlayerPosition();
     this.audio.playMusic("polluted");
@@ -1047,7 +1056,7 @@ class Game {
     if (this.state === STATE.PLAYING || this.state === STATE.GAMEOVER) {
       this._updateAmbient(dt);
       this._updateBursts(dt);
-      this._updateMonsters(dt);
+      this._updateFactories(dt);
     }
 
     if (this.state === STATE.INTRO) {
@@ -1090,7 +1099,7 @@ class Game {
       this._checkCleanMode();
     }
 
-    this._checkMonsters();
+    this._checkFactories();
     if (this.comboPopupTimer > 0) this.comboPopupTimer -= dt;
     if (this.cleanMsgTimer > 0) this.cleanMsgTimer -= dt;
   }
@@ -1546,8 +1555,8 @@ class Game {
     // Subtle animated layer on top of the original background
     this._drawAmbient();
 
-    // Wandering monsters + poof particles
-    this._drawMonsters();
+    // Factories + poof particles
+    this._drawFactories();
     this._drawBursts();
 
     // Items (with colour-coded effects so players can read them at a glance)
@@ -1555,6 +1564,9 @@ class Game {
       this._drawItemEffects(item);
       ctx.drawImage(item.sprite, item.x, item.y, item.w, item.h);
     }
+
+    // Aura behind the kid (based on equipped skin)
+    this._drawPlayerAura();
 
     // Kid
     this._drawKid();
@@ -1652,38 +1664,59 @@ class Game {
     ctx.fill();
   }
 
-  /* ---------------- Polluted-world monsters (blocky, Minecraft-style) ---------------- */
+  /* ---------------- Factories creating pollution (blocky) ---------------- */
 
-  _spawnMonsters() {
-    this.monsters = [];
-    const kinds = ["creeper", "zombie", "ghast", "piglin"];
-    for (let i = 0; i < MONSTER_START; i++) {
-      const kind = pick(kinds);
-      this.monsters.push({
-        kind,
-        x: rand(50, LOGICAL_W - 50),
-        y: kind === "ghast" ? rand(160, 380) : LOGICAL_H - 26,
-        vx: (Math.random() < 0.5 ? -1 : 1) * rand(14, 30),
-        phase: rand(0, Math.PI * 2),
-      });
+  _spawnFactories() {
+    this.factories = [];
+    for (let i = 0; i < FACTORY_START; i++) {
+      const s = rand(0.75, 1.1);
+      const x = 46 + (i / (FACTORY_START - 1)) * (LOGICAL_W - 92) + rand(-10, 10);
+      this.factories.push({ x, s, phase: rand(0, Math.PI * 2) });
     }
   }
 
-  _checkMonsters() {
-    const target = this._targetMonsterCount();
-    while (this.monsters.length > target) {
-      const idx = Math.floor(Math.random() * this.monsters.length);
-      const m = this.monsters[idx];
-      this.monsters.splice(idx, 1);
-      this._spawnPoof(m.x, m.y);
+  _factoryTopY(f) {
+    return LOGICAL_H - 26 - FACTORY_ROWS.length * FACTORY_PX * f.s;
+  }
+
+  _updateFactories(dt) {
+    // Every factory puffs pollution smoke from one of its two chimneys.
+    for (const f of this.factories) {
+      if (Math.random() < 0.4 * dt) {
+        const side = Math.random() < 0.5 ? -1 : 1;
+        const chimX = f.x + side * 1.5 * FACTORY_PX * f.s;
+        this.ambient.push({
+          kind: "brown",
+          x: chimX + rand(-4, 4),
+          y: this._factoryTopY(f) - 2,
+          vx: rand(-5, 5),
+          vy: rand(-32, -20),
+          r: rand(8, 13),
+          grow: rand(3, 5),
+          baseAlpha: rand(0.16, 0.26),
+          phase: rand(0, Math.PI * 2),
+          age: 0,
+          maxLife: rand(4, 6),
+        });
+      }
+    }
+  }
+
+  _checkFactories() {
+    const target = this._targetFactoryCount();
+    while (this.factories.length > target) {
+      const idx = Math.floor(Math.random() * this.factories.length);
+      const f = this.factories[idx];
+      this.factories.splice(idx, 1);
+      this._spawnPoof(f.x, LOGICAL_H - 50);
       this.audio.playPoof();
     }
   }
 
-  _targetMonsterCount() {
-    if (this.health < MONSTER_FADE_START) return MONSTER_START;
-    const removed = Math.min(MONSTER_START, 1 + Math.floor((this.health - MONSTER_FADE_START) / MONSTER_FADE_STEP));
-    return MONSTER_START - removed;
+  _targetFactoryCount() {
+    if (this.health < FACTORY_FADE_START) return FACTORY_START;
+    const removed = Math.min(FACTORY_START, 1 + Math.floor((this.health - FACTORY_FADE_START) / FACTORY_FADE_STEP));
+    return FACTORY_START - removed;
   }
 
   _spawnPoof(x, y) {
@@ -1735,7 +1768,7 @@ class Game {
     }
   }
 
-  /* Blocky pixel-art renderer (Minecraft-ish). */
+  /* Blocky pixel-art renderer. */
   _drawPattern(ctx, rows, palette, x, y, px, s) {
     const p = px * s;
     for (let r = 0; r < rows.length; r++) {
@@ -1751,60 +1784,50 @@ class Game {
     }
   }
 
-  _updateMonsters(dt) {
-    for (const m of this.monsters) {
-      m.x += m.vx * dt;
-      if (m.x < 30) { m.x = 30; m.vx = Math.abs(m.vx); }
-      if (m.x > LOGICAL_W - 30) { m.x = LOGICAL_W - 30; m.vx = -Math.abs(m.vx); }
-    }
-  }
-
-  _drawMonsters() {
+  _drawFactories() {
     const ctx = this.ctx;
-    const t = performance.now() / 1000;
-    for (const m of this.monsters) {
-      const bob = m.kind === "ghast" ? Math.sin(t * 1.6 + m.phase) * 14 : Math.sin(t * 4 + m.phase) * 3;
-      this._drawMonster(ctx, m.kind, m.x, m.y + bob, 1);
+    for (const f of this.factories) {
+      this._drawFactory(ctx, f);
     }
   }
 
-  _drawMonster(ctx, kind, x, y, s) {
-    if (kind === "creeper") this._drawCreeper(ctx, x, y, s);
-    else if (kind === "zombie") this._drawZombie(ctx, x, y, s);
-    else if (kind === "ghast") this._drawGhast(ctx, x, y, s);
-    else this._drawPiglin(ctx, x, y, s);
+  _drawFactory(ctx, f) {
+    const w = FACTORY_ROWS[0].length, h = FACTORY_ROWS.length;
+    const px = FACTORY_PX, s = f.s;
+    this._drawPattern(ctx, FACTORY_ROWS, FACTORY_PALETTE, f.x - (w * px * s) / 2, LOGICAL_H - 26 - h * px * s, px, s);
   }
 
-  _drawCreeper(ctx, x, y, s) {
-    const px = 9;
-    const rows = ["GGGGGG","GGGGGG","GGGGGG","GFFFFG","GFFFFG","GGGGGG","GGGGGG","GGGGGG"];
-    const palette = { G: "#5f9e4f", F: "#1b1b1b" };
-    const w = rows[0].length, h = rows.length;
-    this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - h * px * s, px, s);
-  }
+  /* A glowing halo around the player based on the equipped skin. */
+  _drawPlayerAura() {
+    const skin = SKINS.find((s) => s.id === this.selectedSkinId) || SKINS[0];
+    if (!skin || !skin.aura) return;
+    const ctx = this.ctx;
+    const kid = this.kid;
+    const cx = kid.x + kid.w / 2;
+    const cy = kid.y - kid.h / 2;
+    const t = performance.now() / 1000;
+    const r = kid.w * 0.72 * (1 + 0.04 * Math.sin(t * 3));
 
-  _drawZombie(ctx, x, y, s) {
-    const px = 8;
-    const rows = ["HHHHHH","SSSSSS","SSSSSS","BBBBBB","BBBBBB","BBBBBB","PPPPPP","PPPPPP","PPPPPP"];
-    const palette = { H: "#3b3b3b", S: "#6a8f5a", B: "#3f7fb5", P: "#3a3f45" };
-    const w = rows[0].length, h = rows.length;
-    this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - h * px * s, px, s);
-  }
+    const glow = ctx.createRadialGradient(cx, cy, r * 0.4, cx, cy, r);
+    glow.addColorStop(0, `rgba(${skin.aura}, ${skin.shiny ? 0.45 : 0.28})`);
+    glow.addColorStop(1, `rgba(${skin.aura}, 0)`);
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
 
-  _drawGhast(ctx, x, y, s) {
-    const px = 10;
-    const rows = ["WWWWW","WWWWW","WFFFW","WWWWW","WWWWW"];
-    const palette = { W: "#f2f2f2", F: "#1b1b1b" };
-    const w = rows[0].length, h = rows.length;
-    this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - (h * px * s) / 2, px, s);
-  }
+    ctx.strokeStyle = `rgba(${skin.aura}, ${skin.shiny ? 0.75 : 0.45})`;
+    ctx.lineWidth = skin.shiny ? 4 : 3;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
 
-  _drawPiglin(ctx, x, y, s) {
-    const px = 8;
-    const rows = ["PPPPPP","PPPPPP","PPPPPP","GGGGGG","GGGGGG","PPPPPP","PPPPPP"];
-    const palette = { P: "#e8a0a0", G: "#f0b429" };
-    const w = rows[0].length, h = rows.length;
-    this._drawPattern(ctx, rows, palette, x - (w * px * s) / 2, y - h * px * s, px, s);
+    if (skin.shiny) {
+      for (let k = 0; k < 6; k++) {
+        const a = t * 2.4 + (k * Math.PI) / 3;
+        const sx = cx + Math.cos(a) * r * 1.28;
+        const sy = cy + Math.sin(a) * r * 1.28;
+        const tw = 0.5 + 0.5 * Math.sin(t * 7 + k);
+        ctx.fillStyle = `rgba(255, 235, 150, ${0.5 + 0.5 * tw})`;
+        ctx.beginPath(); ctx.arc(sx, sy, 3 + tw * 2, 0, Math.PI * 2); ctx.fill();
+      }
+    }
   }
 
   _drawCombo() {
@@ -1847,22 +1870,7 @@ class Game {
   }
 
   _skinSprite(id) {
-    if (id === "default") return ASSETS.images.player;
-    const skin = SKINS.find((s) => s.id === id);
-    if (!skin || !skin.tint) return ASSETS.images.player;
-    if (!this._skinTintCache || this._skinTintCache.id !== id) {
-      const base = ASSETS.images.player;
-      const c = document.createElement("canvas");
-      c.width = base.width;
-      c.height = base.height;
-      const cc = c.getContext("2d");
-      cc.drawImage(base, 0, 0);
-      cc.globalCompositeOperation = "source-atop";
-      cc.fillStyle = `rgba(${skin.tint}, 0.55)`;
-      cc.fillRect(0, 0, c.width, c.height);
-      this._skinTintCache = { id, canvas: c };
-    }
-    return this._skinTintCache.canvas;
+    return ASSETS.images.player;
   }
 
   _handleSkinMenuTap(p) {
@@ -1918,6 +1926,15 @@ class Game {
 
       const icon = this._skinSprite(skin.id);
       const iw = 92, ih = 92;
+      const icx = rect.x + slotW / 2;
+      const icy = rect.y + 16 + ih / 2;
+      if (skin.aura) {
+        ctx.fillStyle = `rgba(${skin.aura}, 0.35)`;
+        ctx.beginPath(); ctx.arc(icx, icy, iw * 0.62, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = `rgba(${skin.aura}, 0.85)`;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(icx, icy, iw * 0.62, 0, Math.PI * 2); ctx.stroke();
+      }
       ctx.drawImage(icon, rect.x + (slotW - iw) / 2, rect.y + 16, iw, ih);
 
       ctx.fillStyle = "#ffffff";
