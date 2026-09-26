@@ -68,11 +68,13 @@ const BEE_MAX = 10;                // max flying creatures
 // Unlockable aura "skins" — the Super Kid image stays clear, only the glow changes.
 const SKIN_KEY = "superKidSkin";
 const SKINS = [
-  { id: "none",   name: "No Aura",    cost: 0,   aura: null },
-  { id: "green",  name: "Green Glow", cost: 30,  aura: "110,230,160" },
-  { id: "blue",   name: "Blue Glow",  cost: 60,  aura: "110,190,255" },
-  { id: "purple", name: "Purple Glow", cost: 100, aura: "190,140,255" },
-  { id: "gold",   name: "Gold Glow",  cost: 150, aura: "255,210,80", shiny: true },
+  { id: "none",   name: "No Aura", cost: 0,   aura: null },
+  { id: "green",  name: "Green",   cost: 20,  aura: "110,230,160" },
+  { id: "cyan",   name: "Cyan",    cost: 40,  aura: "90,220,220" },
+  { id: "blue",   name: "Blue",    cost: 60,  aura: "110,190,255" },
+  { id: "purple", name: "Purple",  cost: 80,  aura: "190,140,255" },
+  { id: "pink",   name: "Pink",    cost: 100, aura: "255,140,200" },
+  { id: "gold",   name: "Gold",    cost: 130, aura: "255,210,80", gold: true },
 ];
 
 /* ------------------------------ Utilities ------------------------------ */
@@ -1855,37 +1857,45 @@ class Game {
     }
   }
 
-  /* A glowing halo around the player, based on the equipped aura skin. */
+  /* A glowing aura around the player, based on the equipped aura skin. */
   _drawPlayerAura() {
     const skin = SKINS.find((sk) => sk.id === this.selectedSkinId) || SKINS[0];
     if (!skin || !skin.aura) return;
     const color = skin.aura;
-    const shiny = !!skin.shiny;
+    const gold = !!skin.gold;
     const ctx = this.ctx;
     const kid = this.kid;
     const cx = kid.x + kid.w / 2;
     const cy = kid.y - kid.h / 2;
     const t = performance.now() / 1000;
-    const r = kid.w * 0.72 * (1 + 0.04 * Math.sin(t * 3));
+    const r = kid.w * (gold ? 0.68 : 0.56) * (1 + 0.05 * Math.sin(t * 3));
 
-    const glow = ctx.createRadialGradient(cx, cy, r * 0.4, cx, cy, r);
-    glow.addColorStop(0, `rgba(${color}, ${shiny ? 0.5 : 0.34})`);
+    // Soft glow fill (no ring around Super Kid).
+    const glow = ctx.createRadialGradient(cx, cy, r * 0.35, cx, cy, r);
+    glow.addColorStop(0, `rgba(${color}, ${gold ? 0.55 : 0.38})`);
     glow.addColorStop(1, `rgba(${color}, 0)`);
     ctx.fillStyle = glow;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
 
-    ctx.strokeStyle = `rgba(${color}, ${shiny ? 0.8 : 0.5})`;
-    ctx.lineWidth = shiny ? 4 : 3;
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    // Gold gets an extra outer halo for a more dramatic glow.
+    if (gold) {
+      const r2 = r * 1.4;
+      const g2 = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r2);
+      g2.addColorStop(0, "rgba(255, 220, 110, 0.24)");
+      g2.addColorStop(1, "rgba(255, 220, 110, 0)");
+      ctx.fillStyle = g2;
+      ctx.beginPath(); ctx.arc(cx, cy, r2, 0, Math.PI * 2); ctx.fill();
+    }
 
-    const count = shiny ? 6 : 4;
+    // Orbiting sparkles in the aura's own colour.
+    const count = gold ? 8 : 5;
     for (let k = 0; k < count; k++) {
       const a = t * 2.4 + (k * Math.PI * 2) / count;
-      const sx = cx + Math.cos(a) * r * 1.28;
-      const sy = cy + Math.sin(a) * r * 1.28;
-      const tw = 0.5 + 0.5 * Math.sin(t * 7 + k);
-      ctx.fillStyle = `rgba(255, 235, 150, ${0.5 + 0.5 * tw})`;
-      ctx.beginPath(); ctx.arc(sx, sy, 3 + tw * 2, 0, Math.PI * 2); ctx.fill();
+      const sx = cx + Math.cos(a) * r * 1.22;
+      const sy = cy + Math.sin(a) * r * 1.22;
+      const tw = 0.5 + 0.5 * Math.sin(t * (gold ? 8 : 6) + k);
+      ctx.fillStyle = `rgba(${color}, ${0.55 + 0.45 * tw})`;
+      ctx.beginPath(); ctx.arc(sx, sy, (gold ? 4.5 : 3) + tw * 2, 0, Math.PI * 2); ctx.fill();
     }
   }
 
@@ -1920,7 +1930,7 @@ class Game {
     ctx.fillStyle = "#ffd66b";
     ctx.fillText("Best Score: " + this.bestScore, LOGICAL_W / 2, 104);
 
-    const slotW = 170, slotH = 210, gap = 14;
+    const slotW = 150, slotH = 210, gap = 10;
     const totalW = SKINS.length * slotW + (SKINS.length - 1) * gap;
     let sx = (LOGICAL_W - totalW) / 2;
     const sy = 136;
@@ -1941,7 +1951,7 @@ class Game {
       ctx.stroke();
 
       // Super Kid icon (clear) with the aura colour behind it
-      const iw = 92, ih = 92;
+      const iw = 84, ih = 84;
       const icx = rect.x + slotW / 2;
       const icy = rect.y + 16 + ih / 2;
       if (skin.aura) {
@@ -2171,8 +2181,8 @@ class Game {
     // Planet health card + bar
     const healthColor = this.health >= 70 ? "#3cdc5a" : this.health >= 35 ? "#ffc83c" : "#ff5050";
     this._hudCard("PLANET HEALTH  " + this.health + "%", 18, 18, "#14783c");
-    const barW = 220;
-    const barH = 16;
+    const barW = 150;
+    const barH = 14;
     ctx.fillStyle = "#e6e6e6";
     roundedRect(ctx, 18, 64, barW, barH, 8);
     ctx.fill();

@@ -15,7 +15,7 @@ Catch the good eco items, dodge the pollution, answer the quiz questions, and br
 - **🔥 Combo system** — catch good items in a row to build a score/health multiplier (resets if a bad item hits you).
 - **👾 Flying monsters** — the polluted world starts with **15 blocky, semi-transparent monsters** drifting in the smog. From **20%** health they start to disappear — **one leaves every +2% health** — until the sky is clear at 50%.
 - **🐝 Bees & butterflies** — once the world turns clean at **50%**, a Minecraft-style bee appears, with **more bees and butterflies arriving every +5% health**.
-- **✨ Unlockable aura skins** — tap **Aura** on the intro screen to equip a glowing aura around the (still clear) Super Kid image. Green, Blue and Purple glows unlock as your best score grows, with the **golden super-power glow** as the top look.
+- **✨ Unlockable aura skins** — tap **Aura** on the intro screen to equip a glowing aura around the (still clear) Super Kid image. Six colours (Green, Cyan, Blue, Purple, Pink) unlock as your best score grows, with the **golden super-power glow** as the dramatic top look.
 - **📈 Difficulty ramp:** items fall a little faster (and slightly more often) every minute.
 - **🏆 Best score** is saved in the browser (localStorage) — no account needed.
 - **Eco quizzes:** every 5 catches opens a quick quiz. Answer correctly for a big +6 health bonus.
