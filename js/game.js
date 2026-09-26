@@ -69,11 +69,11 @@ const BEE_MAX = 10;                // max flying creatures
 const SKIN_KEY = "superKidSkin";
 const SKINS = [
   { id: "none",   name: "No Aura", cost: 0,   aura: null },
-  { id: "green",  name: "Green",   cost: 20,  aura: "110,230,160" },
-  { id: "cyan",   name: "Cyan",    cost: 40,  aura: "90,220,220" },
-  { id: "blue",   name: "Blue",    cost: 60,  aura: "110,190,255" },
-  { id: "purple", name: "Purple",  cost: 80,  aura: "190,140,255" },
-  { id: "pink",   name: "Pink",    cost: 100, aura: "255,140,200" },
+  { id: "green",  name: "Green",   cost: 80,  aura: "110,230,160" },
+  { id: "cyan",   name: "Cyan",    cost: 90,  aura: "90,220,220" },
+  { id: "blue",   name: "Blue",    cost: 100, aura: "110,190,255" },
+  { id: "purple", name: "Purple",  cost: 110, aura: "190,140,255" },
+  { id: "pink",   name: "Pink",    cost: 120, aura: "255,140,200" },
   { id: "gold",   name: "Gold",    cost: 130, aura: "255,210,80", gold: true },
 ];
 
@@ -931,8 +931,8 @@ class Game {
   _evaluateQuiz(i) {
     if (i === this.quiz.answer) {
       this.quizResult = "correct";
-      this.score += 6;
-      this.health = clamp(this.health + 6, 0, 100);
+      this.score += 2;
+      this.health = clamp(this.health + 2, 0, 100);
       this.ecoActions += 1;
       this.audio.play("good");
     } else {
@@ -2314,7 +2314,7 @@ class Game {
       if (this.quizResult === "correct") {
         ctx.font = "700 36px 'Comic Neue', 'Comic Sans MS', sans-serif";
         ctx.fillStyle = "#50ff50";
-        ctx.fillText("Correct! +6 bonus points!", px + 40, py + 200);
+        ctx.fillText("Correct! +2 bonus points!", px + 40, py + 200);
       } else {
         ctx.font = "700 36px 'Comic Neue', 'Comic Sans MS', sans-serif";
         ctx.fillStyle = "#ff5050";

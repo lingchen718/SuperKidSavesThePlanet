@@ -18,7 +18,7 @@ Catch the good eco items, dodge the pollution, answer the quiz questions, and br
 - **✨ Unlockable aura skins** — tap **Aura** on the intro screen to equip a glowing aura around the (still clear) Super Kid image. Six colours (Green, Cyan, Blue, Purple, Pink) unlock as your best score grows, with the **golden super-power glow** as the dramatic top look.
 - **📈 Difficulty ramp:** items fall a little faster (and slightly more often) every minute.
 - **🏆 Best score** is saved in the browser (localStorage) — no account needed.
-- **Eco quizzes:** every 5 catches opens a quick quiz. Answer correctly for a big +6 health bonus.
+- **Eco quizzes:** every 5 catches opens a quick quiz. Answer correctly for a +2 points and health bonus.
 - **Clean Environment mode:** when planet health reaches **50%**, the world transforms from polluted to clean (background + music change).
 - **Win / Game Over screens** with confetti, score, and instant replay.
 - **More falling items** with a slightly faster drop speed for extra action.
